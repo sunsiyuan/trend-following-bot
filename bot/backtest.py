@@ -111,7 +111,8 @@ def run_backtest_for_symbol(
     ms_1d = data_client.interval_to_ms(config.TIMEFRAMES["trend"])
     ms_ex = data_client.interval_to_ms(config.TIMEFRAMES["execution"])
     warmup_1d = max(config.TREND_EXISTENCE["window"], config.TREND_QUALITY["window"]) + 10
-    warmup_ex = config.EXECUTION["window"] + config.EXECUTION["min_step_bars"] + 10
+    warmup_exec_steps = max(config.EXECUTION["build_min_step_bars"], config.EXECUTION["reduce_min_step_bars"])
+    warmup_ex = config.EXECUTION["window"] + warmup_exec_steps + 10
     fetch_start = min(start_ms - warmup_1d * ms_1d, start_ms - warmup_ex * ms_ex)
     fetch_start = max(0, fetch_start)
 
@@ -313,6 +314,7 @@ def run_backtest_for_symbol(
             "realized_pnl": float(realized_pnl),
             "trend": decision["trend"],
             "risk": decision["risk"],
+            "regime": decision.get("regime", "TREND"),
             "action": decision["action"],
             "reason": decision["reason"],
         })
@@ -389,6 +391,7 @@ def main() -> None:
         "TREND_EXISTENCE": dict(config.TREND_EXISTENCE),
         "TREND_QUALITY": dict(config.TREND_QUALITY),
         "EXECUTION": dict(config.EXECUTION),
+        "RANGE": dict(config.RANGE),
         "MAX_POSITION_FRAC": dict(config.MAX_POSITION_FRAC),
         "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
         "TAKER_FEE_BPS": config.TAKER_FEE_BPS,

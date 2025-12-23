@@ -59,8 +59,16 @@ class ExecutionCfg(TypedDict):
     indicator: Literal["ma"]  # v1 execution uses MA
     timeframe: str
     window: int
-    min_step_bars: int        # execution guard (cooldown) in bars of execution timeframe
-    max_delta_frac: float     # max change in target position fraction per execution (0..1)
+    build_min_step_bars: int   # execution guard (cooldown) in bars of execution timeframe
+    build_max_delta_frac: float  # max change in target position fraction per execution (0..1)
+    reduce_min_step_bars: int  # execution guard for reductions
+    reduce_max_delta_frac: float  # max change in target position fraction per execution (0..1)
+
+class RangeCfg(TypedDict):
+    enabled: bool
+    price_band_pct: float
+    ma_band_pct: float
+    slope_band_pct: float
 
 TREND_EXISTENCE: TrendExistenceCfg = {
     "indicator": "ma",  # "ma" or "donchian"
@@ -79,8 +87,17 @@ EXECUTION: ExecutionCfg = {
     "indicator": "ma",
     "timeframe": TIMEFRAMES["execution"],
     "window": 7,
-    "min_step_bars": 2,       # e.g. 3 bars on 4h => 12 hours
-    "max_delta_frac": 0.25,   # position changes are smoothed (<=25% of full target per exec)
+    "build_min_step_bars": 2,       # e.g. 3 bars on 4h => 12 hours
+    "build_max_delta_frac": 0.25,   # position changes are smoothed (<=25% of full target per exec)
+    "reduce_min_step_bars": 1,
+    "reduce_max_delta_frac": 0.5,
+}
+
+RANGE: RangeCfg = {
+    "enabled": True,
+    "price_band_pct": 0.01,
+    "ma_band_pct": 0.005,
+    "slope_band_pct": 0.001,
 }
 
 # -----------------------------

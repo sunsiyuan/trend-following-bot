@@ -75,6 +75,7 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     # Trend quality
     tq = config.TREND_QUALITY
     out["quality_ma"] = ma(out["close"], tq["window"])
+    out["quality_ma_prev"] = out["quality_ma"].shift(1)
     return out
 
 def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
@@ -140,13 +141,18 @@ def decide_risk_mode(row_1d: pd.Series, trend: TrendDir) -> RiskMode:
         return "RISK_NEUTRAL"
     return "RISK_OFF"
 
-def execution_gate(row_exec: pd.Series, trend: TrendDir, exec_bar_idx: int, state: StrategyState) -> bool:
-    """
-    Determines whether we are allowed to change position this bar (cooldown + direction filter).
-    """
-    ex = config.EXECUTION
-    if exec_bar_idx - state.last_exec_bar_idx < int(ex["min_step_bars"]):
+def execution_gate_mode(
+    row_exec: pd.Series,
+    trend: TrendDir,
+    exec_bar_idx: int,
+    state: StrategyState,
+    min_step_bars: int,
+    require_trend_filter: bool,
+) -> bool:
+    if exec_bar_idx - state.last_exec_bar_idx < int(min_step_bars):
         return False
+    if not require_trend_filter:
+        return True
 
     close = float(row_exec["close"])
     ema = row_exec.get("exec_ma", np.nan)
@@ -159,6 +165,28 @@ def execution_gate(row_exec: pd.Series, trend: TrendDir, exec_bar_idx: int, stat
     if trend == "SHORT":
         return close < ema
     return False
+
+def is_range_regime(row_1d: pd.Series) -> bool:
+    range_cfg = config.RANGE
+    if not range_cfg["enabled"]:
+        return False
+
+    close = float(row_1d["close"])
+    ma_fast = row_1d.get("trend_ma", np.nan)
+    ma_slow = row_1d.get("quality_ma", np.nan)
+    ma_slow_prev = row_1d.get("quality_ma_prev", np.nan)
+
+    if np.isnan(ma_fast) or np.isnan(ma_slow):
+        return False
+
+    price_near_ma = abs(close - float(ma_slow)) / float(ma_slow) <= float(range_cfg["price_band_pct"])
+    ma_converged = abs(float(ma_fast) - float(ma_slow)) / float(ma_slow) <= float(range_cfg["ma_band_pct"])
+
+    low_slope = False
+    if not np.isnan(ma_slow_prev):
+        low_slope = abs(float(ma_slow) - float(ma_slow_prev)) / float(ma_slow) <= float(range_cfg["slope_band_pct"])
+
+    return (price_near_ma and ma_converged) or (price_near_ma and low_slope)
 
 def compute_desired_target_frac(trend: TrendDir, risk: RiskMode) -> float:
     """
@@ -182,6 +210,13 @@ def smooth_target(current: float, desired: float, max_delta: float) -> float:
         delta = -max_delta
     return current + delta
 
+def is_reduction(current: float, desired: float) -> bool:
+    if abs(desired) < abs(current) - 1e-12:
+        return True
+    if current * desired < 0:
+        return True
+    return False
+
 def decide(
     ts_ms: int,
     exec_bar_idx: int,
@@ -196,9 +231,11 @@ def decide(
       {
         "trend": ...,
         "risk": ...,
+        "regime": "TREND"|"RANGE",
         "current_frac": ...,
         "desired_frac": ...,
         "target_frac": ...,
+        "target_pos_frac": ...,
         "action": "HOLD"|"REBALANCE"|"EXIT",
         "reason": "...",
         "update_last_exec": bool,
@@ -210,46 +247,81 @@ def decide(
         return {
             "trend": "NO_TREND",
             "risk": "RISK_OFF",
+            "regime": "TREND",
             "current_frac": state.position.frac,
             "desired_frac": 0.0,
             "target_frac": state.position.frac,
+            "target_pos_frac": state.position.frac,
             "action": "HOLD",
             "reason": "insufficient_data",
             "update_last_exec": False,
         }
 
-    trend = decide_trend_existence(row_1d)
-    risk = decide_risk_mode(row_1d, trend)
-    desired = compute_desired_target_frac(trend, risk)
     current = float(state.position.frac)
+    range_regime = is_range_regime(row_1d)
+    if range_regime:
+        if abs(current) < 1e-9:
+            return {
+                "trend": "NO_TREND",
+                "risk": "RISK_OFF",
+                "regime": "RANGE",
+                "current_frac": current,
+                "desired_frac": 0.0,
+                "target_frac": current,
+                "target_pos_frac": current,
+                "action": "HOLD",
+                "reason": "range_hold",
+                "update_last_exec": False,
+            }
+        desired = 0.0
+        trend = "NO_TREND"
+        risk = "RISK_OFF"
+    else:
+        trend = decide_trend_existence(row_1d)
+        risk = decide_risk_mode(row_1d, trend)
+        desired = compute_desired_target_frac(trend, risk)
+    regime = "RANGE" if range_regime else "TREND"
 
-    # Emergency exit for risk-off or no-trend: allow reduce to 0 immediately.
-    if desired == 0.0 and abs(current) > 1e-9:
+    if abs(desired - current) < 1e-9:
         return {
             "trend": trend,
             "risk": risk,
+            "regime": regime,
             "current_frac": current,
             "desired_frac": desired,
-            "target_frac": 0.0,
-            "action": "EXIT",
-            "reason": "risk_off_or_no_trend",
-            "update_last_exec": True,  # treat as an exec event
+            "target_frac": current,
+            "target_pos_frac": current,
+            "action": "HOLD",
+            "reason": "already_at_target",
+            "update_last_exec": False,
         }
 
-    allowed = execution_gate(row_exec, trend, exec_bar_idx, state)
+    reducing = is_reduction(current, desired)
+    ex = config.EXECUTION
+    if reducing:
+        min_step_bars = int(ex["reduce_min_step_bars"])
+        max_delta = float(ex["reduce_max_delta_frac"])
+        require_trend_filter = False
+    else:
+        min_step_bars = int(ex["build_min_step_bars"])
+        max_delta = float(ex["build_max_delta_frac"])
+        require_trend_filter = True
+
+    allowed = execution_gate_mode(row_exec, trend, exec_bar_idx, state, min_step_bars, require_trend_filter)
     if not allowed:
         return {
             "trend": trend,
             "risk": risk,
+            "regime": regime,
             "current_frac": current,
             "desired_frac": desired,
             "target_frac": current,
+            "target_pos_frac": current,
             "action": "HOLD",
-            "reason": "execution_gate_blocked",
+            "reason": "range_exit_blocked" if range_regime else "execution_gate_blocked",
             "update_last_exec": False,
         }
 
-    max_delta = float(config.EXECUTION["max_delta_frac"])  # fraction of equity
     target = smooth_target(current, desired, max_delta)
 
     if abs(target - current) < 1e-9:
@@ -264,10 +336,12 @@ def decide(
     return {
         "trend": trend,
         "risk": risk,
+        "regime": regime,
         "current_frac": current,
         "desired_frac": desired,
         "target_frac": target,
+        "target_pos_frac": target,
         "action": action,
-        "reason": reason,
+        "reason": "range_exit" if range_regime else reason,
         "update_last_exec": update_last_exec,
     }
