@@ -66,6 +66,8 @@ class ExecutionCfg(TypedDict):
 
 class RangeCfg(TypedDict):
     enabled: bool
+    ma_fast_window: int
+    ma_slow_window: int
     price_band_pct: float
     ma_band_pct: float
     slope_band_pct: float
@@ -95,6 +97,8 @@ EXECUTION: ExecutionCfg = {
 
 RANGE: RangeCfg = {
     "enabled": True,
+    "ma_fast_window": 15,
+    "ma_slow_window": 50,
     "price_band_pct": 0.01,
     "ma_band_pct": 0.005,
     "slope_band_pct": 0.001,
