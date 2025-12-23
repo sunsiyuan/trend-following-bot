@@ -37,6 +37,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("backtest")
 
+
 def parse_date_to_ms(s: str) -> int:
     """
     Parse 'YYYY-MM-DD' (treated as UTC 00:00) into epoch ms.
@@ -353,9 +354,15 @@ def run_backtest_for_symbol(
     df_day = pd.DataFrame(equity_by_day)
     # Ensure unique dates (keep last)
     df_day = df_day.drop_duplicates(subset=["date_utc"], keep="last")
+    df_day["equity_usdc"] = pd.to_numeric(df_day["equity"], errors="coerce")
+    df_day["close_px"] = pd.to_numeric(df_day["mark_price"], errors="coerce")
 
     # Metrics
-    equity_series = df_day["equity"]
+    equity_series = df_day["equity_usdc"]
+    strategy_metrics = metrics.compute_equity_metrics(
+        equity_series,
+        starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
+    )
     exposure_diagnostics = compute_exposure_diagnostics(df_day)
     decision_counts = compute_trade_decision_counts(trades)
     summary = {
@@ -363,9 +370,6 @@ def run_backtest_for_symbol(
         "start_date_utc": ms_to_ymd(start_ms),
         "end_date_utc": ms_to_ymd(end_ms),
         "starting_cash_usdc": float(config.STARTING_CASH_USDC_PER_SYMBOL),
-        "ending_equity_usdc": float(equity_series.iloc[-1]) if not equity_series.empty else float(config.STARTING_CASH_USDC_PER_SYMBOL),
-        "total_return": metrics.total_return(equity_series) if len(equity_series) >= 2 else 0.0,
-        "max_drawdown": metrics.max_drawdown(equity_series) if len(equity_series) >= 2 else 0.0,
         **decision_counts,
         "win_rate": metrics.trade_win_rate(trades),
         "fee_bps": float(config.TAKER_FEE_BPS),
@@ -378,6 +382,30 @@ def run_backtest_for_symbol(
         },
         **exposure_diagnostics,
     }
+    summary.update(strategy_metrics)
+
+    dates = pd.Index(df_day["date_utc"], name="date_utc")
+    close_px = df_day["close_px"]
+    if close_px.isna().any():
+        log.warning("Missing close_px values detected; forward-filling for buy & hold benchmark.")
+        close_px = close_px.ffill()
+
+    bh_equity = metrics.build_buy_hold_curve(
+        dates=dates,
+        close_px=close_px,
+        starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
+    )
+    bh_metrics = metrics.compute_equity_metrics(
+        bh_equity,
+        starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
+    )
+    summary.update({
+        "buy_hold_ending_equity_usdc": bh_metrics["ending_equity_usdc"],
+        "buy_hold_total_return": bh_metrics["total_return"],
+        "buy_hold_max_drawdown": bh_metrics["max_drawdown"],
+        "buy_hold_sharpe_ratio": bh_metrics["sharpe_ratio"],
+        "alpha_vs_buy_hold": summary.get("total_return", 0.0) - bh_metrics["total_return"],
+    })
 
     # Write outputs
     sym_dir = run_dir / symbol
@@ -385,6 +413,18 @@ def run_backtest_for_symbol(
 
     write_json(sym_dir / "summary.json", summary)
     df_day.to_csv(sym_dir / "equity_by_day.csv", index=False)
+    pd.DataFrame({
+        "date_utc": dates,
+        "close_px": close_px.values,
+        "bh_equity": bh_equity.values,
+    }).to_csv(sym_dir / "equity_by_day_bh.csv", index=False)
+    if "net_exposure" in df_day.columns:
+        pd.DataFrame({
+            "date_utc": dates,
+            "strategy_equity": equity_series.values,
+            "bh_equity": bh_equity.values,
+            "net_exposure": df_day["net_exposure"].values,
+        }).to_csv(sym_dir / "equity_by_day_with_benchmark.csv", index=False)
 
     # overwrite trades file for determinism
     trades_path = sym_dir / "trades.jsonl"
