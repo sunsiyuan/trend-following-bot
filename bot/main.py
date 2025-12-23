@@ -35,7 +35,10 @@ def latest_decision_for_symbol(symbol: str) -> Dict[str, object]:
 
     # A bit more than needed for rolling windows
     trend_lookback = max(config.TREND_EXISTENCE["window"], config.TREND_QUALITY["window"]) + 20
-    exec_lookback = config.EXECUTION["window"] + config.EXECUTION["min_step_bars"] + 50
+    exec_lookback = config.EXECUTION["window"] + max(
+        config.EXECUTION["build_min_step_bars"],
+        config.EXECUTION["reduce_min_step_bars"],
+    ) + 50
 
     candles_1d = data_client.fetch_latest(symbol, trend_tf, lookback_candles=trend_lookback)
     candles_ex = data_client.fetch_latest(symbol, exec_tf, lookback_candles=exec_lookback)
