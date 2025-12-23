@@ -165,6 +165,80 @@ def run_backtest_for_symbol(
             "realized_pnl_usdc_cum": round8(realized_pnl_cum),
         }
 
+    def compute_exposure_diagnostics(df_day_in: pd.DataFrame) -> Dict:
+        days_total = int(len(df_day_in))
+        if days_total == 0:
+            return {
+                "avg_net_exposure": 0.0,
+                "days_total": 0,
+                "days_in_position": 0,
+                "days_long": 0,
+                "days_short": 0,
+                "days_exposure_ge_0_3": 0,
+                "days_exposure_ge_0_7": 0,
+                "pct_in_position": 0.0,
+                "pct_long": 0.0,
+                "pct_short": 0.0,
+                "pct_exposure_ge_0_3": 0.0,
+                "pct_exposure_ge_0_7": 0.0,
+                "exposure_min": 0.0,
+                "exposure_p50": 0.0,
+                "exposure_p90": 0.0,
+                "exposure_max": 0.0,
+            }
+
+        if "net_exposure" in df_day_in.columns:
+            net_exposure = pd.to_numeric(df_day_in["net_exposure"], errors="coerce").fillna(0.0)
+        else:
+            net_exposure = pd.Series([0.0] * days_total)
+
+        if "position_side" in df_day_in.columns:
+            position_side = df_day_in["position_side"].fillna("FLAT").astype(str)
+        else:
+            position_side = pd.Series(["FLAT"] * days_total)
+
+        if "position_qty" in df_day_in.columns:
+            position_qty = pd.to_numeric(df_day_in["position_qty"], errors="coerce").fillna(0.0)
+        else:
+            position_qty = pd.Series([0.0] * days_total)
+
+        in_position = (position_side != "FLAT") | (position_qty.abs() > 0)
+        is_long = (position_side == "LONG") | (position_qty > 0)
+        is_short = (position_side == "SHORT") | (position_qty < 0)
+
+        days_in_position = int(in_position.sum())
+        days_long = int(is_long.sum())
+        days_short = int(is_short.sum())
+        days_exposure_ge_0_3 = int((net_exposure >= 0.3).sum())
+        days_exposure_ge_0_7 = int((net_exposure >= 0.7).sum())
+
+        def pct(value: int) -> float:
+            return float(value / days_total) if days_total > 0 else 0.0
+
+        exposure_min = float(net_exposure.min())
+        exposure_p50 = float(net_exposure.quantile(0.5))
+        exposure_p90 = float(net_exposure.quantile(0.9))
+        exposure_max = float(net_exposure.max())
+
+        return {
+            "avg_net_exposure": round8(float(net_exposure.mean())),
+            "days_total": days_total,
+            "days_in_position": days_in_position,
+            "days_long": days_long,
+            "days_short": days_short,
+            "days_exposure_ge_0_3": days_exposure_ge_0_3,
+            "days_exposure_ge_0_7": days_exposure_ge_0_7,
+            "pct_in_position": round8(pct(days_in_position)),
+            "pct_long": round8(pct(days_long)),
+            "pct_short": round8(pct(days_short)),
+            "pct_exposure_ge_0_3": round8(pct(days_exposure_ge_0_3)),
+            "pct_exposure_ge_0_7": round8(pct(days_exposure_ge_0_7)),
+            "exposure_min": round8(exposure_min),
+            "exposure_p50": round8(exposure_p50),
+            "exposure_p90": round8(exposure_p90),
+            "exposure_max": round8(exposure_max),
+        }
+
     # Iterate execution bars inside evaluation window
     ex_items = list(df_ex_feat.loc[(df_ex_feat.index >= start_ms) & (df_ex_feat.index <= end_ms)].iterrows())
     for bar_idx, (ts, row_ex) in enumerate(ex_items):
@@ -254,6 +328,7 @@ def run_backtest_for_symbol(
 
     # Metrics
     equity_series = df_day["equity"]
+    exposure_diagnostics = compute_exposure_diagnostics(df_day)
     summary = {
         "symbol": symbol,
         "start_date_utc": ms_to_ymd(start_ms),
@@ -271,6 +346,7 @@ def run_backtest_for_symbol(
             "execution": dict(config.EXECUTION),
             "max_position_frac": dict(config.MAX_POSITION_FRAC),
         },
+        **exposure_diagnostics,
     }
 
     # Write outputs
