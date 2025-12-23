@@ -54,12 +54,13 @@ def build_buy_hold_curve(
     """
     Build a buy-and-hold equity curve aligned to the provided dates.
     """
-    aligned_close = close_px.reindex(dates)
+    aligned_close = pd.to_numeric(close_px.reindex(dates), errors="coerce")
     if aligned_close.empty:
         return pd.Series(index=dates, dtype="float64")
     non_nan = aligned_close.dropna()
     if non_nan.empty:
         return pd.Series(index=dates, dtype="float64")
+    aligned_close = aligned_close.ffill().bfill()
     entry_px = float(non_nan.iloc[0])
     qty = starting_cash / entry_px
     equity = qty * aligned_close
@@ -74,6 +75,7 @@ def compute_equity_metrics(
     """
     Compute standard equity curve metrics.
     """
+    equity = pd.to_numeric(equity, errors="coerce").dropna()
     if equity.empty:
         return {
             "ending_equity_usdc": float(starting_cash),
