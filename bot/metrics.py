@@ -27,7 +27,7 @@ def daily_returns_from_equity(equity: pd.Series) -> pd.Series:
     """
     Convert an equity curve into daily percentage returns.
     """
-    return equity.pct_change().dropna()
+    return equity.pct_change(fill_method=None).dropna()
 
 
 def sharpe_ratio_from_daily_returns(
