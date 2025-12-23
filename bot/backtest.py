@@ -138,6 +138,8 @@ def run_backtest_for_symbol(
     last_day: str = ""
     last_mark_price: float | None = None
     equity_by_day: List[Dict] = []
+    flip_exit_count = 0
+    flip_block_count = 0
 
     def round8(x: float) -> float:
         return float(round(x, 8))
@@ -260,6 +262,10 @@ def run_backtest_for_symbol(
             df_exec_feat=df_ex_feat,
             state=state,
         )
+        if decision.get("reason") == "flip_exit":
+            flip_exit_count += 1
+        if decision.get("reason") == "flip_cooldown_block":
+            flip_block_count += 1
 
         target_frac = float(decision["target_frac"])
         current_notional = qty * price
@@ -317,6 +323,8 @@ def run_backtest_for_symbol(
             "regime": decision.get("regime", "TREND"),
             "action": decision["action"],
             "reason": decision["reason"],
+            "flip_block_until_ts": decision.get("flip_block_until_ts", 0),
+            "cooldown_active": decision.get("cooldown_active", False),
         })
 
     # record final day
@@ -340,6 +348,8 @@ def run_backtest_for_symbol(
         "total_return": metrics.total_return(equity_series) if len(equity_series) >= 2 else 0.0,
         "max_drawdown": metrics.max_drawdown(equity_series) if len(equity_series) >= 2 else 0.0,
         "trade_count": len(trades),
+        "flip_exit_count": int(flip_exit_count),
+        "flip_block_count": int(flip_block_count),
         "win_rate": metrics.trade_win_rate(trades),
         "fee_bps": float(config.TAKER_FEE_BPS),
         "layers": {

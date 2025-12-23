@@ -24,10 +24,12 @@ import numpy as np
 import pandas as pd
 
 from bot import config
+from bot import data_client
 from bot.indicators import ma, donchian
 
 TrendDir = Literal["LONG", "SHORT", "NO_TREND"]
 RiskMode = config.RiskMode
+PositionSide = Literal["LONG", "SHORT", "FLAT"]
 
 @dataclass
 class Position:
@@ -41,6 +43,8 @@ class Position:
 class StrategyState:
     position: Position = field(default_factory=Position)
     last_exec_bar_idx: int = -10**9  # bar index on execution timeframe
+    flip_block_until_ts: int = 0
+    flip_blocked_side: Optional[TrendDir] = None
 
 def _last_row_at_or_before(df: pd.DataFrame, ts_ms: int) -> Optional[pd.Series]:
     """
@@ -217,6 +221,16 @@ def is_reduction(current: float, desired: float) -> bool:
         return True
     return False
 
+def side_from_frac(frac: float) -> PositionSide:
+    if abs(frac) < 1e-12:
+        return "FLAT"
+    return "LONG" if frac > 0 else "SHORT"
+
+def desired_side_from_frac(frac: float) -> TrendDir:
+    if abs(frac) < 1e-12:
+        return "NO_TREND"
+    return "LONG" if frac > 0 else "SHORT"
+
 def decide(
     ts_ms: int,
     exec_bar_idx: int,
@@ -254,6 +268,8 @@ def decide(
             "target_pos_frac": state.position.frac,
             "action": "HOLD",
             "reason": "insufficient_data",
+            "flip_block_until_ts": state.flip_block_until_ts,
+            "cooldown_active": False,
             "update_last_exec": False,
         }
 
@@ -271,6 +287,8 @@ def decide(
                 "target_pos_frac": current,
                 "action": "HOLD",
                 "reason": "range_hold",
+                "flip_block_until_ts": state.flip_block_until_ts,
+                "cooldown_active": False,
                 "update_last_exec": False,
             }
         desired = 0.0
@@ -281,6 +299,78 @@ def decide(
         risk = decide_risk_mode(row_1d, trend)
         desired = compute_desired_target_frac(trend, risk)
     regime = "RANGE" if range_regime else "TREND"
+    current_side = side_from_frac(current)
+    desired_side = desired_side_from_frac(desired)
+
+    ex = config.EXECUTION
+    flip_cooldown_bars = int(ex.get("flip_cooldown_bars", 0))
+    flip_block_until_ts = int(state.flip_block_until_ts)
+    flip_blocked_side = state.flip_blocked_side
+    if flip_block_until_ts and ts_ms >= flip_block_until_ts:
+        flip_block_until_ts = 0
+        flip_blocked_side = None
+        state.flip_block_until_ts = 0
+        state.flip_blocked_side = None
+
+    flip_cooldown_ms = 0
+    if flip_cooldown_bars > 0:
+        flip_cooldown_tf = str(ex.get("flip_cooldown_tf", ex["timeframe"]))
+        flip_cooldown_ms = data_client.interval_to_ms(flip_cooldown_tf) * flip_cooldown_bars
+
+    flip_detected = (
+        flip_cooldown_bars > 0
+        and current_side in ("LONG", "SHORT")
+        and desired_side in ("LONG", "SHORT")
+        and current_side != desired_side
+    )
+    if flip_detected:
+        if ex.get("allow_flip_exit_immediately", True) and abs(current) > 1e-12:
+            if flip_block_until_ts <= ts_ms or flip_blocked_side != desired_side:
+                flip_block_until_ts = ts_ms + flip_cooldown_ms
+                flip_blocked_side = desired_side
+            state.flip_block_until_ts = flip_block_until_ts
+            state.flip_blocked_side = flip_blocked_side
+            reducing = True
+            max_delta = float(ex["reduce_max_delta_frac"])
+            target = smooth_target(current, 0.0, max_delta)
+            action = "REBALANCE" if abs(target - current) > 1e-9 else "HOLD"
+            return {
+                "trend": trend,
+                "risk": risk,
+                "regime": regime,
+                "current_frac": current,
+                "desired_frac": desired,
+                "target_frac": target,
+                "target_pos_frac": target,
+                "action": action,
+                "reason": "flip_exit",
+                "flip_block_until_ts": flip_block_until_ts,
+                "cooldown_active": True,
+                "update_last_exec": abs(target - current) > 1e-9,
+            }
+
+    cooldown_active = (
+        flip_cooldown_bars > 0
+        and current_side == "FLAT"
+        and desired_side in ("LONG", "SHORT")
+        and flip_blocked_side == desired_side
+        and ts_ms < flip_block_until_ts
+    )
+    if cooldown_active:
+        return {
+            "trend": trend,
+            "risk": risk,
+            "regime": regime,
+            "current_frac": current,
+            "desired_frac": desired,
+            "target_frac": current,
+            "target_pos_frac": current,
+            "action": "HOLD",
+            "reason": "flip_cooldown_block",
+            "flip_block_until_ts": flip_block_until_ts,
+            "cooldown_active": True,
+            "update_last_exec": False,
+        }
 
     if abs(desired - current) < 1e-9:
         return {
@@ -293,11 +383,12 @@ def decide(
             "target_pos_frac": current,
             "action": "HOLD",
             "reason": "already_at_target",
+            "flip_block_until_ts": flip_block_until_ts,
+            "cooldown_active": False,
             "update_last_exec": False,
         }
 
     reducing = is_reduction(current, desired)
-    ex = config.EXECUTION
     if reducing:
         min_step_bars = int(ex["reduce_min_step_bars"])
         max_delta = float(ex["reduce_max_delta_frac"])
@@ -319,6 +410,8 @@ def decide(
             "target_pos_frac": current,
             "action": "HOLD",
             "reason": "range_exit_blocked" if range_regime else "execution_gate_blocked",
+            "flip_block_until_ts": flip_block_until_ts,
+            "cooldown_active": False,
             "update_last_exec": False,
         }
 
@@ -343,5 +436,7 @@ def decide(
         "target_pos_frac": target,
         "action": action,
         "reason": "range_exit" if range_regime else reason,
+        "flip_block_until_ts": flip_block_until_ts,
+        "cooldown_active": False,
         "update_last_exec": update_last_exec,
     }

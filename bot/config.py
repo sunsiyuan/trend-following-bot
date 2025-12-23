@@ -63,6 +63,9 @@ class ExecutionCfg(TypedDict):
     build_max_delta_frac: float  # max change in target position fraction per execution (0..1)
     reduce_min_step_bars: int  # execution guard for reductions
     reduce_max_delta_frac: float  # max change in target position fraction per execution (0..1)
+    flip_cooldown_bars: int  # bars to wait before reverse entry after flip exit
+    flip_cooldown_tf: str  # timeframe used for flip cooldown
+    allow_flip_exit_immediately: bool  # always True in v1
 
 class RangeCfg(TypedDict):
     enabled: bool
@@ -91,6 +94,9 @@ EXECUTION: ExecutionCfg = {
     "build_max_delta_frac": 0.25,   # position changes are smoothed (<=25% of full target per exec)
     "reduce_min_step_bars": 1,
     "reduce_max_delta_frac": 0.5,
+    "flip_cooldown_bars": 6,
+    "flip_cooldown_tf": TIMEFRAMES["execution"],
+    "allow_flip_exit_immediately": True,
 }
 
 RANGE: RangeCfg = {
