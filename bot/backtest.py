@@ -347,6 +347,7 @@ def run_backtest_for_symbol(
             "trend_quality": dict(config.TREND_QUALITY),
             "execution": dict(config.EXECUTION),
             "max_position_frac": dict(config.MAX_POSITION_FRAC),
+            "direction_mode": config.DIRECTION_MODE,
         },
         **exposure_diagnostics,
     }
@@ -393,6 +394,7 @@ def main() -> None:
         "EXECUTION": dict(config.EXECUTION),
         "RANGE": dict(config.RANGE),
         "MAX_POSITION_FRAC": dict(config.MAX_POSITION_FRAC),
+        "DIRECTION_MODE": config.DIRECTION_MODE,
         "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
         "TAKER_FEE_BPS": config.TAKER_FEE_BPS,
         "HL_INFO_URL": config.HL_INFO_URL,

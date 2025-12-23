@@ -28,6 +28,7 @@ from bot.indicators import ma, donchian
 
 TrendDir = Literal["LONG", "SHORT", "NO_TREND"]
 RiskMode = config.RiskMode
+DirectionMode = config.DirectionMode
 
 @dataclass
 class Position:
@@ -188,10 +189,20 @@ def is_range_regime(row_1d: pd.Series) -> bool:
 
     return (price_near_ma and ma_converged) or (price_near_ma and low_slope)
 
+def _apply_direction_mode(trend: TrendDir, direction_mode: DirectionMode) -> TrendDir:
+    if direction_mode == "both_side":
+        return trend
+    if direction_mode == "long_only" and trend == "SHORT":
+        return "NO_TREND"
+    if direction_mode == "short_only" and trend == "LONG":
+        return "NO_TREND"
+    return trend
+
 def compute_desired_target_frac(trend: TrendDir, risk: RiskMode) -> float:
     """
     Desired target position fraction in [-1, 1].
     """
+    trend = _apply_direction_mode(trend, config.DIRECTION_MODE)
     frac = float(config.MAX_POSITION_FRAC[risk])
     if trend == "LONG":
         return +frac

@@ -105,12 +105,19 @@ RANGE: RangeCfg = {
 # -----------------------------
 
 RiskMode = Literal["RISK_ON", "RISK_NEUTRAL", "RISK_OFF"]
+DirectionMode = Literal["long_only", "short_only", "both_side"]
 
 MAX_POSITION_FRAC: Dict[RiskMode, float] = {
     "RISK_ON": 1.0,
     "RISK_NEUTRAL": 0.5,
     "RISK_OFF": 0.0,  # reduce-only in strategy; target=0 means exit
 }
+
+# Directional bias for the strategy.
+# - "long_only": only take long signals; shorts are treated as exit/flat
+# - "short_only": only take short signals; longs are treated as exit/flat
+# - "both_side": take both long and short signals (default)
+DIRECTION_MODE: DirectionMode = "both_side"
 
 # Backtest settings
 STARTING_CASH_USDC_PER_SYMBOL: float = 10_000.0
