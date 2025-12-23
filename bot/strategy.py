@@ -18,7 +18,7 @@ Key design:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -26,7 +26,8 @@ import pandas as pd
 from bot import config
 from bot.indicators import ma, donchian
 
-TrendDir = Literal["LONG", "SHORT", "NO_TREND"]
+TrendDir = Literal["LONG", "SHORT"]
+MarketState = Literal["LONG", "SHORT", "RANGE"]
 RiskMode = config.RiskMode
 DirectionMode = config.DirectionMode
 
@@ -42,6 +43,8 @@ class Position:
 class StrategyState:
     position: Position = field(default_factory=Position)
     last_exec_bar_idx: int = -10**9  # bar index on execution timeframe
+    flip_block_until_exec_bar_idx: int = -10**9
+    flip_blocked_side: Optional[TrendDir] = None
 
 def _last_row_at_or_before(df: pd.DataFrame, ts_ms: int) -> Optional[pd.Series]:
     """
@@ -62,6 +65,10 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     Adds columns needed for 1D decisions, based on config.
     """
     out = df_1d.copy()
+    range_cfg = config.RANGE
+    out["ma_fast_for_state"] = ma(out["close"], int(range_cfg["ma_fast_window"]))
+    out["ma_slow_for_state"] = ma(out["close"], int(range_cfg["ma_slow_window"]))
+    out["ma_slow_prev_for_state"] = out["ma_slow_for_state"].shift(1)
     # Trend existence
     te = config.TREND_EXISTENCE
     if te["indicator"] == "ma":
@@ -88,30 +95,29 @@ def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
     out["exec_ma"] = ma(out["close"], ex["window"])
     return out
 
-def decide_trend_existence(row_1d: pd.Series) -> TrendDir:
+def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     te = config.TREND_EXISTENCE
     close = float(row_1d["close"])
 
     if te["indicator"] == "ma":
         ref = row_1d.get("trend_ma", np.nan)
         if np.isnan(ref):
-            return "NO_TREND"
-        if close > float(ref):
-            return "LONG"
-        if close < float(ref):
-            return "SHORT"
-        return "NO_TREND"
+            return None
+        return "LONG" if close >= float(ref) else "SHORT"
 
     # donchian
     upper = row_1d.get("trend_upper", float("nan"))
     lower = row_1d.get("trend_lower", float("nan"))
     if np.isnan(upper) or np.isnan(lower):
-        return "NO_TREND"
-    if close > float(upper):
+        return None
+    upper = float(upper)
+    lower = float(lower)
+    if close >= upper:
         return "LONG"
-    if close < float(lower):
+    if close <= lower:
         return "SHORT"
-    return "NO_TREND"
+    mid = (upper + lower) / 2.0
+    return "LONG" if close >= mid else "SHORT"
 
 def decide_risk_mode(row_1d: pd.Series, trend: TrendDir) -> RiskMode:
     """
@@ -120,7 +126,7 @@ def decide_risk_mode(row_1d: pd.Series, trend: TrendDir) -> RiskMode:
     """
     close = float(row_1d["close"])
     qma = row_1d.get("quality_ma", np.nan)
-    if trend == "NO_TREND" or np.isnan(qma):
+    if np.isnan(qma):
         return "RISK_OFF"
 
     qma = float(qma)
@@ -173,9 +179,9 @@ def is_range_regime(row_1d: pd.Series) -> bool:
         return False
 
     close = float(row_1d["close"])
-    ma_fast = row_1d.get("trend_ma", np.nan)
-    ma_slow = row_1d.get("quality_ma", np.nan)
-    ma_slow_prev = row_1d.get("quality_ma_prev", np.nan)
+    ma_fast = row_1d.get("ma_fast_for_state", np.nan)
+    ma_slow = row_1d.get("ma_slow_for_state", np.nan)
+    ma_slow_prev = row_1d.get("ma_slow_prev_for_state", np.nan)
 
     if np.isnan(ma_fast) or np.isnan(ma_slow):
         return False
@@ -228,6 +234,11 @@ def is_reduction(current: float, desired: float) -> bool:
         return True
     return False
 
+def _side_from_frac(frac: float) -> Literal["LONG", "SHORT", "FLAT"]:
+    if abs(frac) < 1e-9:
+        return "FLAT"
+    return "LONG" if frac > 0 else "SHORT"
+
 def decide(
     ts_ms: int,
     exec_bar_idx: int,
@@ -252,11 +263,13 @@ def decide(
         "update_last_exec": bool,
       }
     """
+    eps = 1e-9
+    # Stage A: fetch latest rows.
     row_1d = _last_row_at_or_before(df_1d_feat, ts_ms)
     row_exec = _last_row_at_or_before(df_exec_feat, ts_ms)
     if row_1d is None or row_exec is None:
         return {
-            "trend": "NO_TREND",
+            "trend": "INSUFFICIENT_DATA",
             "risk": "RISK_OFF",
             "regime": "TREND",
             "current_frac": state.position.frac,
@@ -269,33 +282,63 @@ def decide(
         }
 
     current = float(state.position.frac)
-    range_regime = is_range_regime(row_1d)
-    if range_regime:
-        if abs(current) < 1e-9:
-            return {
-                "trend": "NO_TREND",
-                "risk": "RISK_OFF",
-                "regime": "RANGE",
-                "current_frac": current,
-                "desired_frac": 0.0,
-                "target_frac": current,
-                "target_pos_frac": current,
-                "action": "HOLD",
-                "reason": "range_hold",
-                "update_last_exec": False,
-            }
-        desired = 0.0
-        trend = "NO_TREND"
-        risk = "RISK_OFF"
-    else:
-        trend = decide_trend_existence(row_1d)
-        risk = decide_risk_mode(row_1d, trend)
-        desired = compute_desired_target_frac(trend, risk)
-    regime = "RANGE" if range_regime else "TREND"
-
-    if abs(desired - current) < 1e-9:
+    # Stage B: determine market state (LONG/SHORT/RANGE).
+    raw_dir = decide_trend_existence(row_1d)
+    if raw_dir is None:
         return {
-            "trend": trend,
+            "trend": "INSUFFICIENT_DATA",
+            "risk": "RISK_OFF",
+            "regime": "TREND",
+            "current_frac": current,
+            "desired_frac": 0.0,
+            "target_frac": current,
+            "target_pos_frac": current,
+            "action": "HOLD",
+            "reason": "insufficient_data",
+            "update_last_exec": False,
+        }
+
+    range_regime = is_range_regime(row_1d)
+    market_state: MarketState = "RANGE" if range_regime else raw_dir
+
+    # Stage C: decide risk mode and desired target.
+    if market_state == "RANGE":
+        risk = "RISK_OFF"
+        desired = 0.0
+    else:
+        risk = decide_risk_mode(row_1d, raw_dir)
+        desired = compute_desired_target_frac(raw_dir, risk)
+
+    # Stage D: apply flip cooldown logic.
+    current_side = _side_from_frac(current)
+    desired_side = _side_from_frac(desired)
+    ex = config.EXECUTION
+
+    if exec_bar_idx >= state.flip_block_until_exec_bar_idx:
+        state.flip_blocked_side = None
+
+    if current_side != "FLAT" and desired_side != "FLAT" and current_side != desired_side:
+        # Flip detected: flatten first and start cooldown before re-entry.
+        state.flip_blocked_side = desired_side
+        state.flip_block_until_exec_bar_idx = exec_bar_idx + int(ex["build_min_step_bars"])
+        desired = 0.0
+        desired_side = "FLAT"
+
+    if (
+        current_side == "FLAT"
+        and desired_side != "FLAT"
+        and state.flip_blocked_side == desired_side
+        and exec_bar_idx < state.flip_block_until_exec_bar_idx
+    ):
+        desired = 0.0
+        desired_side = "FLAT"
+
+    regime = "RANGE" if market_state == "RANGE" else "TREND"
+
+    if abs(desired - current) < eps:
+        reason = "range_hold" if market_state == "RANGE" and abs(current) < eps else "already_at_target"
+        return {
+            "trend": market_state,
             "risk": risk,
             "regime": regime,
             "current_frac": current,
@@ -303,12 +346,12 @@ def decide(
             "target_frac": current,
             "target_pos_frac": current,
             "action": "HOLD",
-            "reason": "already_at_target",
+            "reason": reason,
             "update_last_exec": False,
         }
 
+    # Stage E: choose execution pacing and gate.
     reducing = is_reduction(current, desired)
-    ex = config.EXECUTION
     if reducing:
         min_step_bars = int(ex["reduce_min_step_bars"])
         max_delta = float(ex["reduce_max_delta_frac"])
@@ -318,10 +361,11 @@ def decide(
         max_delta = float(ex["build_max_delta_frac"])
         require_trend_filter = True
 
-    allowed = execution_gate_mode(row_exec, trend, exec_bar_idx, state, min_step_bars, require_trend_filter)
+    allowed = execution_gate_mode(row_exec, raw_dir, exec_bar_idx, state, min_step_bars, require_trend_filter)
     if not allowed:
+        reason = "range_exit_blocked" if market_state == "RANGE" and reducing else "execution_gate_blocked"
         return {
-            "trend": trend,
+            "trend": market_state,
             "risk": risk,
             "regime": regime,
             "current_frac": current,
@@ -329,23 +373,25 @@ def decide(
             "target_frac": current,
             "target_pos_frac": current,
             "action": "HOLD",
-            "reason": "range_exit_blocked" if range_regime else "execution_gate_blocked",
+            "reason": reason,
             "update_last_exec": False,
         }
 
+    # Stage F: compute smoothed target.
     target = smooth_target(current, desired, max_delta)
 
-    if abs(target - current) < 1e-9:
+    if abs(target - current) < eps:
         action = "HOLD"
-        reason = "already_at_target"
+        reason = "range_hold" if market_state == "RANGE" and abs(current) < eps else "already_at_target"
         update_last_exec = False
     else:
         action = "REBALANCE"
-        reason = "gate_passed"
+        reason = "range_exit" if market_state == "RANGE" and reducing else "gate_passed"
         update_last_exec = True
 
     return {
-        "trend": trend,
+        "trend": market_state,
+        "trend_dir": raw_dir,
         "risk": risk,
         "regime": regime,
         "current_frac": current,
@@ -353,6 +399,6 @@ def decide(
         "target_frac": target,
         "target_pos_frac": target,
         "action": action,
-        "reason": "range_exit" if range_regime else reason,
+        "reason": reason,
         "update_last_exec": update_last_exec,
     }
