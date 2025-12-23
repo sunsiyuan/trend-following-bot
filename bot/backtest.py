@@ -128,29 +128,55 @@ def run_backtest_for_symbol(
     cash = float(config.STARTING_CASH_USDC_PER_SYMBOL)
     qty = 0.0
     avg_entry = 0.0
+    realized_pnl_cum = 0.0
     state = strat.StrategyState()
 
     fee_rate = config.fee_rate_from_bps(config.TAKER_FEE_BPS)
 
     trades: List[Dict] = []
-    equity_by_bar: List[Tuple[int, float]] = []
-
     last_day: str = ""
-    equity_by_day: List[Tuple[str, float]] = []
+    last_mark_price: float | None = None
+    equity_by_day: List[Dict] = []
+
+    def round8(x: float) -> float:
+        return float(round(x, 8))
+
+    def position_side_from_qty(position_qty: float) -> str:
+        if abs(position_qty) < 1e-12:
+            return "FLAT"
+        return "LONG" if position_qty > 0 else "SHORT"
+
+    def build_day_row(day: str, mark_price: float) -> Dict:
+        equity = cash + qty * mark_price
+        position_value = abs(qty) * mark_price
+        net_exposure = position_value / equity if abs(equity) > 1e-12 else 0.0
+        unrealized_pnl = qty * (mark_price - avg_entry) if abs(qty) > 1e-12 else 0.0
+        return {
+            "date_utc": day,
+            "equity": round8(equity),
+            "cash_usdc": round8(cash),
+            "position_side": position_side_from_qty(qty),
+            "position_qty": round8(qty),
+            "avg_entry_price": round8(avg_entry),
+            "mark_price": round8(mark_price),
+            "position_value_usdc": round8(position_value),
+            "net_exposure": round8(net_exposure),
+            "unrealized_pnl_usdc": round8(unrealized_pnl),
+            "realized_pnl_usdc_cum": round8(realized_pnl_cum),
+        }
 
     # Iterate execution bars inside evaluation window
     ex_items = list(df_ex_feat.loc[(df_ex_feat.index >= start_ms) & (df_ex_feat.index <= end_ms)].iterrows())
     for bar_idx, (ts, row_ex) in enumerate(ex_items):
         price = float(row_ex["close"])
 
-        equity = cash + qty * price
-        equity_by_bar.append((int(ts), float(equity)))
-
         day = ms_to_ymd(int(ts))
-        if last_day and day != last_day:
-            # record last equity of previous day
-            equity_by_day.append((last_day, float(equity_by_bar[-2][1]) if len(equity_by_bar) >= 2 else float(equity)))
+        if last_day and day != last_day and last_mark_price is not None:
+            equity_by_day.append(build_day_row(last_day, last_mark_price))
         last_day = day
+        last_mark_price = price
+
+        equity = cash + qty * price
 
         decision = strat.decide(
             ts_ms=int(ts),
@@ -177,6 +203,7 @@ def run_backtest_for_symbol(
 
         # Realized pnl bookkeeping (avg entry)
         new_avg_entry, realized_pnl = update_avg_and_realized(qty, avg_entry, dq, price)
+        realized_pnl_cum += realized_pnl
 
         # Apply trade to cash + position
         cash -= delta_notional
@@ -217,11 +244,11 @@ def run_backtest_for_symbol(
         })
 
     # record final day
-    if last_day and equity_by_bar:
-        equity_by_day.append((last_day, float(equity_by_bar[-1][1])))
+    if last_day and last_mark_price is not None:
+        equity_by_day.append(build_day_row(last_day, last_mark_price))
 
     # Build daily equity dataframe
-    df_day = pd.DataFrame(equity_by_day, columns=["date_utc", "equity"])
+    df_day = pd.DataFrame(equity_by_day)
     # Ensure unique dates (keep last)
     df_day = df_day.drop_duplicates(subset=["date_utc"], keep="last")
 
