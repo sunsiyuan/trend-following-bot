@@ -60,6 +60,32 @@ def append_jsonl(path: Path, rows: List[Dict]) -> None:
         for r in rows:
             f.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n")
 
+def compute_trade_decision_counts(trades: List[Dict]) -> Dict:
+    decision_count = len(trades)
+    rebalance_count = 0
+    hold_count = 0
+    rebalance_by_reason: Dict[str, int] = {}
+    hold_by_reason: Dict[str, int] = {}
+
+    for trade in trades:
+        action = trade.get("action")
+        reason = trade.get("reason", "unknown")
+        if action == "REBALANCE":
+            rebalance_count += 1
+            rebalance_by_reason[reason] = rebalance_by_reason.get(reason, 0) + 1
+        elif action == "HOLD":
+            hold_count += 1
+            hold_by_reason[reason] = hold_by_reason.get(reason, 0) + 1
+
+    return {
+        "decision_count": decision_count,
+        "rebalance_count": rebalance_count,
+        "hold_count": hold_count,
+        "trade_count": rebalance_count,
+        "rebalance_by_reason": rebalance_by_reason,
+        "hold_by_reason": hold_by_reason,
+    }
+
 def sign(x: float) -> int:
     return 1 if x > 0 else (-1 if x < 0 else 0)
 
@@ -331,6 +357,7 @@ def run_backtest_for_symbol(
     # Metrics
     equity_series = df_day["equity"]
     exposure_diagnostics = compute_exposure_diagnostics(df_day)
+    decision_counts = compute_trade_decision_counts(trades)
     summary = {
         "symbol": symbol,
         "start_date_utc": ms_to_ymd(start_ms),
@@ -339,7 +366,7 @@ def run_backtest_for_symbol(
         "ending_equity_usdc": float(equity_series.iloc[-1]) if not equity_series.empty else float(config.STARTING_CASH_USDC_PER_SYMBOL),
         "total_return": metrics.total_return(equity_series) if len(equity_series) >= 2 else 0.0,
         "max_drawdown": metrics.max_drawdown(equity_series) if len(equity_series) >= 2 else 0.0,
-        "trade_count": len(trades),
+        **decision_counts,
         "win_rate": metrics.trade_win_rate(trades),
         "fee_bps": float(config.TAKER_FEE_BPS),
         "layers": {
