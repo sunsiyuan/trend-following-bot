@@ -143,7 +143,7 @@ def compute_diagnostic_counts(
         df_day = pd.read_csv(equity_by_day_csv_path)
         if "date_utc" in df_day.columns:
             dates = df_day["date_utc"].dropna().astype(str).tolist()
-            days_total = len(pd.unique(dates))
+            days_total = len(pd.unique(pd.Series(dates)))
         else:
             warn_once("Missing date_utc in equity_by_day.csv; falling back to trades.")
         if "net_exposure" in df_day.columns and "date_utc" in df_day.columns:
