@@ -278,8 +278,17 @@ def compute_diagnostic_counts(
         else:
             flat_due_to_other_days += 1
 
-    if missing_trade_days:
-        warn_once("Some equity days have no matching trades.jsonl record; diagnostics may be low.")
+    raw_dir_days_covered = raw_dir_long_days + raw_dir_short_days
+    target_frac_days_covered = (
+        target_frac_days_0
+        + target_frac_days_0_5
+        + target_frac_days_1
+        + target_frac_days_other
+    )
+    if days_total and raw_dir_days_covered < 0.8 * days_total:
+        warn_once(
+            "Diagnostics coverage issue: raw_dir coverage below 80% of days_total."
+        )
 
     return {
         "raw_dir_long_days": raw_dir_long_days,
@@ -297,6 +306,10 @@ def compute_diagnostic_counts(
         "target_frac_days_0_5": target_frac_days_0_5,
         "target_frac_days_1": target_frac_days_1,
         "target_frac_days_other": target_frac_days_other,
+        "diagnostics_sanity": {
+            "raw_dir_days_covered": raw_dir_days_covered,
+            "target_frac_days_covered": target_frac_days_covered,
+        },
     }, warnings
 
 def sign(x: float) -> int:
@@ -500,7 +513,16 @@ def run_backtest_for_symbol(
             state=state,
         )
 
-        target_frac = float(decision["target_frac"])
+        target_value = decision.get("target_frac")
+        if target_value is None:
+            target_value = decision.get("target_pos_frac")
+        target_frac = float(target_value)
+        market_state = decision.get("market_state") or decision.get("trend")
+        raw_dir = decision.get("raw_dir") or decision.get("trend_dir")
+        if raw_dir is None and decision.get("trend") in {"LONG", "SHORT"}:
+            raw_dir = decision.get("trend")
+        risk_mode = decision.get("risk_mode") or decision.get("risk")
+        reason = decision.get("reason") or "already_at_target"
         current_notional = qty * price
         # Use current equity pre-trade to translate fraction -> notional
         target_notional = target_frac * equity
@@ -508,6 +530,33 @@ def run_backtest_for_symbol(
         delta_notional = target_notional - current_notional
         if abs(delta_notional) < 1e-8:
             # no trade
+            position_frac = (qty * price) / equity if abs(equity) > 1e-12 else 0.0
+            trades.append({
+                "ts_ms": int(ts),
+                "date_utc": ms_to_ymd(int(ts)),
+                "symbol": symbol,
+                "price": price,
+                "delta_notional": 0.0,
+                "delta_qty": 0.0,
+                "fee": 0.0,
+                "equity_before": float(equity),
+                "equity_after": float(equity),
+                "position_qty_after": float(qty),
+                "position_frac_after": float(position_frac),
+                "avg_entry_after": float(avg_entry),
+                "realized_pnl": 0.0,
+                "trend": decision.get("trend"),
+                "trend_dir": decision.get("trend_dir"),
+                "raw_dir": raw_dir,
+                "market_state": market_state,
+                "risk": decision.get("risk"),
+                "risk_mode": risk_mode,
+                "regime": decision.get("regime", "TREND"),
+                "direction_mode": config.DIRECTION_MODE,
+                "target_pos_frac": float(target_frac),
+                "action": "HOLD",
+                "reason": reason,
+            })
             if decision.get("update_last_exec"):
                 state.last_exec_bar_idx = bar_idx
             continue
@@ -551,16 +600,17 @@ def run_backtest_for_symbol(
             "position_frac_after": float(state.position.frac),
             "avg_entry_after": float(avg_entry),
             "realized_pnl": float(realized_pnl),
-            "trend": decision["trend"],
+            "trend": decision.get("trend"),
             "trend_dir": decision.get("trend_dir"),
-            "market_state": decision.get("trend"),
-            "risk": decision["risk"],
-            "risk_mode": decision["risk"],
+            "raw_dir": raw_dir,
+            "market_state": market_state,
+            "risk": decision.get("risk"),
+            "risk_mode": risk_mode,
             "regime": decision.get("regime", "TREND"),
             "direction_mode": config.DIRECTION_MODE,
-            "target_pos_frac": float(decision.get("target_pos_frac", target_frac)),
-            "action": decision["action"],
-            "reason": decision["reason"],
+            "target_pos_frac": float(target_frac),
+            "action": decision.get("action", "REBALANCE"),
+            "reason": reason,
         })
 
     # record final day
