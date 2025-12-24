@@ -669,7 +669,6 @@ def run_backtest_for_symbol(
         "end_date_utc": ms_to_ymd(end_ms),
         "starting_cash_usdc": float(config.STARTING_CASH_USDC_PER_SYMBOL),
         **decision_counts,
-        "win_rate": metrics.trade_win_rate(trades),
         "fee_bps": float(config.TAKER_FEE_BPS),
         "layers": {
             "trend_existence": dict(config.TREND_EXISTENCE),
