@@ -37,9 +37,10 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "fast_dir": None,
     "slow_dir": None,
     "align": None,
+    "delta": None,
+    "sigma_delta": None,
     "z": None,
     "zq": None,
-    "sigma_spread": None,
     "desired_side": None,
     "desired_pos_frac": None,
     "target_pos_frac": None,
@@ -119,25 +120,21 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         out["logret"] = np.log(out["close"]).diff()
         out["spread"] = np.log(out["trend_ma"]) - np.log(out["quality_ma"])
         out["delta"] = (out["spread"] - out["spread"].shift(slope_k)) / float(slope_k)
-        out["dspread"] = out["spread"].diff()
-        out["sigma_spread"] = out["dspread"].rolling(n_vol, min_periods=n_vol).std()
-        out["sigma_mean"] = out["sigma_spread"] / np.sqrt(float(slope_k))
+        out["sigma_delta"] = out["delta"].rolling(n_vol, min_periods=n_vol).std()
         out["z"] = out["delta"] / np.maximum(
-            out["sigma_mean"],
+            out["sigma_delta"],
             config.VOL_EPS,
         )
         out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
         out["align"] = 1.0 - np.abs(np.tanh(out["zq"] / config.ANGLE_SIZING_A))
         out["align"] = np.clip(out["align"], 0.0, 1.0)
-        nan_mask = out[["trend_ma", "quality_ma", "spread", "delta", "sigma_spread"]].isna().any(axis=1)
+        nan_mask = out[["trend_ma", "quality_ma", "spread", "delta", "sigma_delta"]].isna().any(axis=1)
         out.loc[nan_mask, "align"] = 1.0
     else:
         out["logret"] = np.nan
         out["spread"] = np.nan
         out["delta"] = np.nan
-        out["dspread"] = np.nan
-        out["sigma_spread"] = np.nan
-        out["sigma_mean"] = np.nan
+        out["sigma_delta"] = np.nan
         out["z"] = np.nan
         out["zq"] = np.nan
         out["align"] = 1.0
@@ -359,9 +356,10 @@ def decide(
             fast_dir=raw_dir,
             slow_dir=slow_dir,
             align=align,
+            delta=row_1d.get("delta"),
+            sigma_delta=row_1d.get("sigma_delta"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
-            sigma_spread=row_1d.get("sigma_spread"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -394,9 +392,10 @@ def decide(
             fast_dir=raw_dir,
             slow_dir=slow_dir,
             align=align,
+            delta=row_1d.get("delta"),
+            sigma_delta=row_1d.get("sigma_delta"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
-            sigma_spread=row_1d.get("sigma_spread"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -426,9 +425,10 @@ def decide(
         fast_dir=raw_dir,
         slow_dir=slow_dir,
         align=align,
+        delta=row_1d.get("delta"),
+        sigma_delta=row_1d.get("sigma_delta"),
         z=row_1d.get("z"),
         zq=row_1d.get("zq"),
-        sigma_spread=row_1d.get("sigma_spread"),
         desired_side=desired_side,
         desired_pos_frac=desired,
         target_pos_frac=target,
