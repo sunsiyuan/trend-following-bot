@@ -385,7 +385,7 @@ def run_backtest_for_symbol(
     summary.update(strategy_metrics)
 
     dates = pd.Index(df_day["date_utc"], name="date_utc")
-    close_px = df_day["close_px"]
+    close_px = pd.Series(df_day["close_px"].to_numpy(), index=dates, name="close_px")
     if close_px.isna().any():
         log.warning("Missing close_px values detected; forward-filling for buy & hold benchmark.")
         close_px = close_px.ffill()
