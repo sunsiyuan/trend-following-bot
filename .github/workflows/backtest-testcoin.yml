@@ -1,0 +1,31 @@
+name: Backtest (testcoin)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run backtest
+        run: |
+          python -m bot.backtest --start 2024-01-01 --end 2025-12-20 --symbols BTCTEST
+
+      - name: Print summary.json
+        run: |
+          summary_path="$(ls -td data/backtest_result/*/BTCTEST/summary.json | head -n1)"
+          echo "Summary path: ${summary_path}"
+          cat "${summary_path}"
