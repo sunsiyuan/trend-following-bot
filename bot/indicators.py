@@ -69,6 +69,16 @@ def donchian(high: pd.Series, low: pd.Series, window: int) -> Tuple[pd.Series, p
     lower = low.rolling(window, min_periods=window).min().shift(1)
     return upper, lower
 
+def hlc3(high: pd.Series | None, low: pd.Series | None, close: pd.Series) -> pd.Series:
+    """
+    HLC3 price: (high + low + close) / 3, with fallback to close when high/low missing.
+    """
+    if high is None or low is None:
+        return close.copy()
+    hlc3_val = (high + low + close) / 3.0
+    valid = high.notna() & low.notna()
+    return hlc3_val.where(valid, close)
+
 def quantize_toward_zero(x: pd.Series, q: float) -> pd.Series:
     """
     Quantize toward zero: sign(x) * floor(abs(x)/q) * q

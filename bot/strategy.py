@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from bot import config
-from bot.indicators import donchian, log_slope, moving_average, quantize_toward_zero
+from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
 TrendDir = Literal["LONG", "SHORT"]
 MarketState = Literal["LONG", "SHORT"]
@@ -38,6 +38,13 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "fast_sign": None,
     "slow_dir": None,
     "slow_sign": None,
+    "hlc3": None,
+    "ema_fast": None,
+    "ema_slow": None,
+    "fast_state": None,
+    "slow_state": None,
+    "s_fast": None,
+    "s_slow": None,
     "align": None,
     "sigma_price": None,
     "sigma_mismatch_mean": None,
@@ -97,12 +104,17 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     Adds columns needed for 1D decisions, based on config.
     """
     out = df_1d.copy()
+    close = out["close"]
+    high = out["high"] if "high" in out.columns else None
+    low = out["low"] if "low" in out.columns else None
+    out["hlc3"] = hlc3(high, low, close)
+    price_series = out["hlc3"]
     # Trend existence
     te = config.TREND_EXISTENCE
     if te["indicator"] == "ma":
         ma_type = te.get("ma_type", "sma")
         slope_k = int(te.get("slope_k", 2))
-        out["trend_ma"] = moving_average(out["close"], te["window"], ma_type)
+        out["trend_ma"] = moving_average(price_series, te["window"], ma_type)
         out["trend_log_slope"] = log_slope(out["trend_ma"], slope_k)
     elif te["indicator"] == "donchian":
         upper, lower = donchian(out["high"], out["low"], te["window"])
@@ -114,7 +126,7 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     # Trend quality
     tq = config.TREND_QUALITY
     quality_ma_type = tq.get("ma_type", "sma")
-    out["quality_ma"] = moving_average(out["close"], tq["window"], quality_ma_type)
+    out["quality_ma"] = moving_average(price_series, tq["window"], quality_ma_type)
     out["quality_ma_prev"] = out["quality_ma"].shift(1)
     slope_k = int(config.TREND_EXISTENCE.get("slope_k", 2))
     out["quality_log_slope"] = log_slope(out["quality_ma"], slope_k)
@@ -122,7 +134,7 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     if te["indicator"] == "ma" and tq["indicator"] == "ma":
         w_fast = int(config.TREND_EXISTENCE["window"])
         n_vol = config.vol_window_from_fast_window(w_fast)
-        out["logret"] = np.log(out["close"]).diff()
+        out["logret"] = np.log(price_series).diff()
         out["delta"] = out["trend_log_slope"] - out["quality_log_slope"]
         out["sigma_price"] = out["logret"].rolling(n_vol, min_periods=n_vol).std()
         alpha_f = 2.0 / (float(config.TREND_EXISTENCE["window"]) + 1.0)
@@ -134,17 +146,17 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
             config.VOL_EPS,
         )
         out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
-        fast_slope = out["trend_log_slope"]
-        slow_slope = out["quality_log_slope"]
+        out["fast_state"] = np.log(out["hlc3"]) - np.log(out["trend_ma"])
+        out["slow_state"] = np.log(out["hlc3"]) - np.log(out["quality_ma"])
         out["fast_sign"] = np.where(
-            fast_slope > 0,
+            out["fast_state"] > 0,
             1.0,
-            np.where(fast_slope < 0, -1.0, np.where(fast_slope.isna(), np.nan, 0.0)),
+            np.where(out["fast_state"] < 0, -1.0, np.where(out["fast_state"].isna(), np.nan, 0.0)),
         )
         slow_sign = np.where(
-            slow_slope > 0,
+            out["slow_state"] > 0,
             1.0,
-            np.where(slow_slope < 0, -1.0, np.where(slow_slope.isna(), np.nan, 0.0)),
+            np.where(out["slow_state"] < 0, -1.0, np.where(out["slow_state"].isna(), np.nan, 0.0)),
         )
         out["slow_sign"] = slow_sign
         out["z_dir"] = slow_sign * out["z"]
@@ -154,11 +166,18 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         out["align"] = np.clip(out["align"], 0.0, 1.0)
         nan_mask = out[
             [
+                "hlc3",
+                "trend_ma",
+                "quality_ma",
                 "trend_log_slope",
                 "quality_log_slope",
                 "sigma_price",
                 "sigma_mismatch_mean",
                 "z",
+                "fast_state",
+                "slow_state",
+                "fast_sign",
+                "slow_sign",
             ]
         ].isna().any(axis=1)
         out.loc[nan_mask, "align"] = 1.0
@@ -169,6 +188,8 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         out["sigma_mismatch_mean"] = np.nan
         out["z"] = np.nan
         out["zq"] = np.nan
+        out["fast_state"] = np.nan
+        out["slow_state"] = np.nan
         out["fast_sign"] = np.nan
         out["slow_sign"] = np.nan
         out["z_dir"] = np.nan
@@ -189,7 +210,7 @@ def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
 
 def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     te = config.TREND_EXISTENCE
-    close = float(row_1d["close"])
+    close = float(row_1d.get("hlc3", row_1d["close"]))
 
     if te["indicator"] == "ma":
         slope = row_1d.get("trend_log_slope", np.nan)
@@ -393,6 +414,13 @@ def decide(
             fast_sign=fast_sign,
             slow_dir=slow_dir,
             slow_sign=slow_sign,
+            hlc3=row_1d.get("hlc3"),
+            ema_fast=row_1d.get("trend_ma"),
+            ema_slow=row_1d.get("quality_ma"),
+            fast_state=row_1d.get("fast_state"),
+            slow_state=row_1d.get("slow_state"),
+            s_fast=row_1d.get("trend_log_slope"),
+            s_slow=row_1d.get("quality_log_slope"),
             align=align,
             sigma_price=row_1d.get("sigma_price"),
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
@@ -422,8 +450,23 @@ def decide(
         max_delta = float(ex["build_max_delta_frac"])
         require_trend_filter = True
 
-    gate_trend = "LONG" if desired > 0 else "SHORT"
-    allowed = execution_gate_mode(row_exec, gate_trend, exec_bar_idx, state, min_step_bars, require_trend_filter)
+    gate_trend: Optional[TrendDir] = None
+    if desired > 0:
+        gate_trend = "LONG"
+    elif desired < 0:
+        gate_trend = "SHORT"
+
+    if require_trend_filter and gate_trend is None:
+        allowed = False
+    else:
+        allowed = execution_gate_mode(
+            row_exec,
+            gate_trend or "LONG",
+            exec_bar_idx,
+            state,
+            min_step_bars,
+            require_trend_filter,
+        )
     if not allowed:
         reason = "execution_gate_blocked"
         return make_decision(
@@ -434,6 +477,13 @@ def decide(
             fast_sign=fast_sign,
             slow_dir=slow_dir,
             slow_sign=slow_sign,
+            hlc3=row_1d.get("hlc3"),
+            ema_fast=row_1d.get("trend_ma"),
+            ema_slow=row_1d.get("quality_ma"),
+            fast_state=row_1d.get("fast_state"),
+            slow_state=row_1d.get("slow_state"),
+            s_fast=row_1d.get("trend_log_slope"),
+            s_slow=row_1d.get("quality_log_slope"),
             align=align,
             sigma_price=row_1d.get("sigma_price"),
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
@@ -472,6 +522,13 @@ def decide(
         fast_sign=fast_sign,
         slow_dir=slow_dir,
         slow_sign=slow_sign,
+        hlc3=row_1d.get("hlc3"),
+        ema_fast=row_1d.get("trend_ma"),
+        ema_slow=row_1d.get("quality_ma"),
+        fast_state=row_1d.get("fast_state"),
+        slow_state=row_1d.get("slow_state"),
+        s_fast=row_1d.get("trend_log_slope"),
+        s_slow=row_1d.get("quality_log_slope"),
         align=align,
         sigma_price=row_1d.get("sigma_price"),
         sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
