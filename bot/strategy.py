@@ -41,6 +41,9 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "sigma_mismatch_mean": None,
     "z": None,
     "zq": None,
+    "z_dir": None,
+    "penalty": None,
+    "penalty_q": None,
     "desired_side": None,
     "desired_pos_frac": None,
     "target_pos_frac": None,
@@ -129,9 +132,26 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
             config.VOL_EPS,
         )
         out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
-        out["align"] = 1.0 - np.abs(np.tanh(out["zq"] / config.ANGLE_SIZING_A))
+        slow_sign = np.where(
+            out["quality_log_slope"] > 0,
+            1.0,
+            np.where(out["quality_log_slope"] < 0, -1.0, np.nan),
+        )
+        out["z_dir"] = slow_sign * out["z"]
+        out["penalty"] = np.maximum(0.0, -out["z_dir"])
+        out["penalty_q"] = np.floor(out["penalty"] / config.ANGLE_SIZING_Q) * config.ANGLE_SIZING_Q
+        out["align"] = 1.0 - np.tanh(out["penalty_q"] / config.ANGLE_SIZING_A)
         out["align"] = np.clip(out["align"], 0.0, 1.0)
-        nan_mask = out[["trend_log_slope", "quality_log_slope", "sigma_price", "sigma_mismatch_mean"]].isna().any(axis=1)
+        nan_mask = out[
+            [
+                "trend_log_slope",
+                "quality_log_slope",
+                "sigma_price",
+                "sigma_mismatch_mean",
+                "z",
+                "z_dir",
+            ]
+        ].isna().any(axis=1)
         out.loc[nan_mask, "align"] = 1.0
     else:
         out["logret"] = np.nan
@@ -140,6 +160,9 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         out["sigma_mismatch_mean"] = np.nan
         out["z"] = np.nan
         out["zq"] = np.nan
+        out["z_dir"] = np.nan
+        out["penalty"] = np.nan
+        out["penalty_q"] = np.nan
         out["align"] = 1.0
     return out
 
@@ -363,6 +386,9 @@ def decide(
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
+            z_dir=row_1d.get("z_dir"),
+            penalty=row_1d.get("penalty"),
+            penalty_q=row_1d.get("penalty_q"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -399,6 +425,9 @@ def decide(
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
+            z_dir=row_1d.get("z_dir"),
+            penalty=row_1d.get("penalty"),
+            penalty_q=row_1d.get("penalty_q"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -432,6 +461,9 @@ def decide(
         sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
         z=row_1d.get("z"),
         zq=row_1d.get("zq"),
+        z_dir=row_1d.get("z_dir"),
+        penalty=row_1d.get("penalty"),
+        penalty_q=row_1d.get("penalty_q"),
         desired_side=desired_side,
         desired_pos_frac=desired,
         target_pos_frac=target,
