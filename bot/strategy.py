@@ -37,8 +37,8 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "fast_dir": None,
     "slow_dir": None,
     "align": None,
-    "delta": None,
-    "sigma_delta": None,
+    "sigma_price": None,
+    "sigma_mismatch_mean": None,
     "z": None,
     "zq": None,
     "desired_side": None,
@@ -118,23 +118,26 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         w_fast = int(config.TREND_EXISTENCE["window"])
         n_vol = config.vol_window_from_fast_window(w_fast)
         out["logret"] = np.log(out["close"]).diff()
-        out["spread"] = np.log(out["trend_ma"]) - np.log(out["quality_ma"])
-        out["delta"] = (out["spread"] - out["spread"].shift(slope_k)) / float(slope_k)
-        out["sigma_delta"] = out["delta"].rolling(n_vol, min_periods=n_vol).std()
+        out["delta"] = out["trend_log_slope"] - out["quality_log_slope"]
+        out["sigma_price"] = out["logret"].rolling(n_vol, min_periods=n_vol).std()
+        alpha_f = 2.0 / (float(config.TREND_EXISTENCE["window"]) + 1.0)
+        alpha_s = 2.0 / (float(config.TREND_QUALITY["window"]) + 1.0)
+        vf = alpha_f / (2.0 - alpha_f) + alpha_s / (2.0 - alpha_s)
+        out["sigma_mismatch_mean"] = out["sigma_price"] * np.sqrt(vf) / np.sqrt(float(slope_k))
         out["z"] = out["delta"] / np.maximum(
-            out["sigma_delta"],
+            out["sigma_mismatch_mean"],
             config.VOL_EPS,
         )
         out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
         out["align"] = 1.0 - np.abs(np.tanh(out["zq"] / config.ANGLE_SIZING_A))
         out["align"] = np.clip(out["align"], 0.0, 1.0)
-        nan_mask = out[["trend_ma", "quality_ma", "spread", "delta", "sigma_delta"]].isna().any(axis=1)
+        nan_mask = out[["trend_log_slope", "quality_log_slope", "sigma_price", "sigma_mismatch_mean"]].isna().any(axis=1)
         out.loc[nan_mask, "align"] = 1.0
     else:
         out["logret"] = np.nan
-        out["spread"] = np.nan
         out["delta"] = np.nan
-        out["sigma_delta"] = np.nan
+        out["sigma_price"] = np.nan
+        out["sigma_mismatch_mean"] = np.nan
         out["z"] = np.nan
         out["zq"] = np.nan
         out["align"] = 1.0
@@ -356,8 +359,8 @@ def decide(
             fast_dir=raw_dir,
             slow_dir=slow_dir,
             align=align,
-            delta=row_1d.get("delta"),
-            sigma_delta=row_1d.get("sigma_delta"),
+            sigma_price=row_1d.get("sigma_price"),
+            sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
             desired_side=desired_side,
@@ -392,8 +395,8 @@ def decide(
             fast_dir=raw_dir,
             slow_dir=slow_dir,
             align=align,
-            delta=row_1d.get("delta"),
-            sigma_delta=row_1d.get("sigma_delta"),
+            sigma_price=row_1d.get("sigma_price"),
+            sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
             desired_side=desired_side,
@@ -425,8 +428,8 @@ def decide(
         fast_dir=raw_dir,
         slow_dir=slow_dir,
         align=align,
-        delta=row_1d.get("delta"),
-        sigma_delta=row_1d.get("sigma_delta"),
+        sigma_price=row_1d.get("sigma_price"),
+        sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
         z=row_1d.get("z"),
         zq=row_1d.get("zq"),
         desired_side=desired_side,
