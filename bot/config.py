@@ -14,7 +14,7 @@ Project config.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Optional, TypedDict
+from typing import Dict, List, Literal, NotRequired, Optional, TypedDict
 
 # -----------------------------
 # Market / symbols
@@ -56,6 +56,7 @@ TIMEFRAMES: Dict[str, str] = {
 # 指标类型：目前只支持 ma / donchian
 # 调参思路：先把“语义收敛 + 统计口径对齐”做好，再扩指标集合
 IndicatorType = Literal["ma", "donchian"]
+MAType = Literal["sma", "ema"]
 
 class TrendExistenceCfg(TypedDict):
     # 趋势存在层：回答“现在应该偏多/偏空/还是不参与？”
@@ -64,6 +65,8 @@ class TrendExistenceCfg(TypedDict):
     indicator: IndicatorType
     timeframe: str
     window: int
+    ma_type: NotRequired[MAType]
+    slope_k: NotRequired[int]
 
 class TrendQualityCfg(TypedDict):
     # 趋势质量层：回答“最多可以给多大仓位？”
@@ -75,6 +78,7 @@ class TrendQualityCfg(TypedDict):
     timeframe: str
     window: int
     neutral_band_pct: float
+    ma_type: NotRequired[MAType]
 
 class ExecutionCfg(TypedDict):
     # 执行层：回答“今天/这一根执行K线，是否要调整仓位？调整多少？”
@@ -85,6 +89,8 @@ class ExecutionCfg(TypedDict):
     indicator: Literal["ma"]
     timeframe: str
     window: int
+    ma_type: NotRequired[MAType]
+    slope_k: NotRequired[int]
 
     # 关键：min_step_bars 相当于“动作冷却”，避免每根都动
     # - build_min_step_bars=2 且 execution=4h => 最快 8 小时才允许再加仓一次
@@ -140,6 +146,8 @@ TREND_EXISTENCE: TrendExistenceCfg = {
     "indicator": "ma",  # "ma" or "donchian"
     "timeframe": TIMEFRAMES["trend"],
     "window": 15,
+    "ma_type": "ema",
+    "slope_k": 2,
 }
 
 # 趋势质量层默认：MA(1d, 50) + neutral band
@@ -161,6 +169,8 @@ EXECUTION: ExecutionCfg = {
     "indicator": "ma",
     "timeframe": TIMEFRAMES["execution"],
     "window": 7,
+    "ma_type": "ema",
+    "slope_k": 1,
 
     # 加仓：更谨慎（减少追高/噪声），所以冷却更长、单次幅度更小
     "build_min_step_bars": 2,       # e.g. 3 bars on 4h => 12 hours（注：这里是 2 => 8h）

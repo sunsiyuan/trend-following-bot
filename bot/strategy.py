@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 
 from bot import config
-from bot.indicators import ma, donchian
+from bot.indicators import donchian, log_slope, moving_average
 
 TrendDir = Literal["LONG", "SHORT"]
 MarketState = Literal["LONG", "SHORT", "RANGE"]
@@ -87,13 +87,16 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     """
     out = df_1d.copy()
     range_cfg = config.RANGE
-    out["ma_fast_for_state"] = ma(out["close"], int(range_cfg["ma_fast_window"]))
-    out["ma_slow_for_state"] = ma(out["close"], int(range_cfg["ma_slow_window"]))
+    out["ma_fast_for_state"] = moving_average(out["close"], int(range_cfg["ma_fast_window"]))
+    out["ma_slow_for_state"] = moving_average(out["close"], int(range_cfg["ma_slow_window"]))
     out["ma_slow_prev_for_state"] = out["ma_slow_for_state"].shift(1)
     # Trend existence
     te = config.TREND_EXISTENCE
     if te["indicator"] == "ma":
-        out["trend_ma"] = ma(out["close"], te["window"])
+        ma_type = te.get("ma_type", "sma")
+        slope_k = int(te.get("slope_k", 2))
+        out["trend_ma"] = moving_average(out["close"], te["window"], ma_type)
+        out["trend_log_slope"] = log_slope(out["trend_ma"], slope_k)
     elif te["indicator"] == "donchian":
         upper, lower = donchian(out["high"], out["low"], te["window"])
         out["trend_upper"] = upper
@@ -103,7 +106,8 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
 
     # Trend quality
     tq = config.TREND_QUALITY
-    out["quality_ma"] = ma(out["close"], tq["window"])
+    quality_ma_type = tq.get("ma_type", "sma")
+    out["quality_ma"] = moving_average(out["close"], tq["window"], quality_ma_type)
     out["quality_ma_prev"] = out["quality_ma"].shift(1)
     return out
 
@@ -113,7 +117,8 @@ def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
     """
     out = df_exec.copy()
     ex = config.EXECUTION
-    out["exec_ma"] = ma(out["close"], ex["window"])
+    ma_type = ex.get("ma_type", "sma")
+    out["exec_ma"] = moving_average(out["close"], ex["window"], ma_type)
     return out
 
 def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
@@ -121,10 +126,15 @@ def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     close = float(row_1d["close"])
 
     if te["indicator"] == "ma":
-        ref = row_1d.get("trend_ma", np.nan)
-        if np.isnan(ref):
+        slope = row_1d.get("trend_log_slope", np.nan)
+        if np.isnan(slope):
             return None
-        return "LONG" if close >= float(ref) else "SHORT"
+        slope = float(slope)
+        if slope > 0:
+            return "LONG"
+        if slope < 0:
+            return "SHORT"
+        return None
 
     # donchian
     upper = row_1d.get("trend_upper", float("nan"))
@@ -183,15 +193,15 @@ def execution_gate_mode(
         return True
 
     close = float(row_exec["close"])
-    ema = row_exec.get("exec_ma", np.nan)
-    if np.isnan(ema):
+    exec_ma = row_exec.get("exec_ma", np.nan)
+    if np.isnan(exec_ma):
         return False
-    ema = float(ema)
+    exec_ma = float(exec_ma)
 
     if trend == "LONG":
-        return close > ema
+        return close > exec_ma
     if trend == "SHORT":
-        return close < ema
+        return close < exec_ma
     return False
 
 def is_range_regime(row_1d: pd.Series) -> bool:
