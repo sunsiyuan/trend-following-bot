@@ -1,5 +1,9 @@
 # local storage
-data/
+data/**
+!data/
+!data/market_data/
+!data/market_data/BTCTEST/
+!data/market_data/BTCTEST/**
 
 # Mac OS
 .DS_Store
