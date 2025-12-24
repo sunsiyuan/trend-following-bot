@@ -87,6 +87,218 @@ def compute_trade_decision_counts(trades: List[Dict]) -> Dict:
         "hold_by_reason": hold_by_reason,
     }
 
+def compute_diagnostic_counts(
+    trades_jsonl_path: Path,
+    equity_by_day_csv_path: Path,
+    direction_mode: str,
+) -> Tuple[Dict, List[str]]:
+    warnings: List[str] = []
+    trades_by_day: Dict[str, Dict] = {}
+
+    def warn_once(msg: str) -> None:
+        if msg not in warnings:
+            warnings.append(msg)
+
+    def parse_ts_to_day(ts_val: int | float | str) -> str | None:
+        try:
+            ts_num = float(ts_val)
+        except (TypeError, ValueError):
+            return None
+        if ts_num > 1e12:
+            ts_ms = int(ts_num)
+        else:
+            ts_ms = int(ts_num * 1000)
+        return ms_to_ymd(ts_ms)
+
+    if trades_jsonl_path.exists():
+        with trades_jsonl_path.open("r", encoding="utf-8") as f:
+            for idx, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    warn_once("Failed to parse trades.jsonl; diagnostics may be incomplete.")
+                    continue
+                day = record.get("date_utc")
+                if not day:
+                    ts_guess = record.get("ts_ms") or record.get("ts_utc")
+                    day = parse_ts_to_day(ts_guess) if ts_guess is not None else None
+                if not day:
+                    warn_once("Missing date_utc/ts_ms in trades.jsonl; skipping some diagnostics.")
+                    continue
+                ts_sort = record.get("ts_ms") or record.get("ts_utc") or idx
+                prev = trades_by_day.get(day)
+                if prev is None or ts_sort >= prev.get("_ts_sort", -1):
+                    record["_ts_sort"] = ts_sort
+                    trades_by_day[day] = record
+    else:
+        warn_once("Missing trades.jsonl; diagnostics may be incomplete.")
+
+    days_total = 0
+    flat_by_day: Dict[str, bool] = {}
+    dates: List[str] = []
+    if equity_by_day_csv_path.exists():
+        df_day = pd.read_csv(equity_by_day_csv_path)
+        if "date_utc" in df_day.columns:
+            dates = df_day["date_utc"].dropna().astype(str).tolist()
+            days_total = len(pd.unique(dates))
+        else:
+            warn_once("Missing date_utc in equity_by_day.csv; falling back to trades.")
+        if "net_exposure" in df_day.columns and "date_utc" in df_day.columns:
+            net_exposure = pd.to_numeric(df_day["net_exposure"], errors="coerce").fillna(0.0)
+            for day, exposure in zip(df_day["date_utc"].astype(str), net_exposure, strict=False):
+                flat_by_day[day] = abs(float(exposure)) <= 1e-12
+        else:
+            warn_once("Missing net_exposure in equity_by_day.csv; inferring flat days from trades.")
+    else:
+        warn_once("Missing equity_by_day.csv; diagnostics may be incomplete.")
+
+    if not dates:
+        dates = sorted(trades_by_day.keys())
+        days_total = len(dates)
+
+    def get_raw_dir(record: Dict) -> str | None:
+        raw_dir = record.get("raw_dir") or record.get("trend_dir")
+        if raw_dir:
+            return str(raw_dir)
+        trend = record.get("trend")
+        if trend in {"LONG", "SHORT"}:
+            warn_once("raw_dir missing; using trend as fallback for some days.")
+            return trend
+        return None
+
+    def get_risk_mode(record: Dict) -> str | None:
+        risk = record.get("risk_mode") or record.get("risk")
+        return str(risk) if risk is not None else None
+
+    def get_target_frac(record: Dict) -> float | None:
+        for key in ("target_pos_frac", "target_frac", "target_fraction"):
+            if key in record:
+                try:
+                    return float(record[key])
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    raw_dir_long_days = 0
+    raw_dir_short_days = 0
+    risk_on_days = 0
+    risk_neutral_days = 0
+    risk_off_days = 0
+    flat_days_total = 0
+    flat_due_to_long_only_days = 0
+    flat_due_to_risk_off_days = 0
+    flat_due_to_range_days = 0
+    flat_due_to_execution_gate_days = 0
+    flat_due_to_other_days = 0
+    target_frac_days_0 = 0
+    target_frac_days_0_5 = 0
+    target_frac_days_1 = 0
+    target_frac_days_other = 0
+
+    eps = 1e-6
+    missing_trade_days = 0
+    has_equity_flat = bool(flat_by_day)
+    if has_equity_flat:
+        flat_days_total = int(sum(1 for value in flat_by_day.values() if value))
+
+    for day in dates:
+        record = trades_by_day.get(day)
+        if record is None:
+            missing_trade_days += 1
+            target_frac_days_other += 1
+            if flat_by_day.get(day):
+                flat_due_to_other_days += 1
+            continue
+
+        raw_dir = get_raw_dir(record)
+        if raw_dir == "LONG":
+            raw_dir_long_days += 1
+        elif raw_dir == "SHORT":
+            raw_dir_short_days += 1
+        elif raw_dir is None:
+            warn_once("Missing raw_dir/trend_dir in trades.jsonl; raw_dir counts may be low.")
+
+        risk_mode = get_risk_mode(record)
+        if risk_mode == "RISK_ON":
+            risk_on_days += 1
+        elif risk_mode == "RISK_NEUTRAL":
+            risk_neutral_days += 1
+        elif risk_mode == "RISK_OFF":
+            risk_off_days += 1
+        elif risk_mode is None:
+            warn_once("Missing risk_mode/risk in trades.jsonl; risk counts may be low.")
+
+        target_frac = get_target_frac(record)
+        if target_frac is None:
+            target_frac_days_other += 1
+            warn_once("Missing target_pos_frac in trades.jsonl; target histogram may be incomplete.")
+        elif abs(target_frac) <= eps:
+            target_frac_days_0 += 1
+        elif abs(target_frac - 0.5) <= eps:
+            target_frac_days_0_5 += 1
+        elif abs(target_frac - 1.0) <= eps:
+            target_frac_days_1 += 1
+        else:
+            target_frac_days_other += 1
+
+        flat_flag = flat_by_day.get(day)
+        if flat_flag is None:
+            pos_frac = record.get("position_frac_after")
+            pos_qty = record.get("position_qty_after")
+            if pos_frac is not None:
+                flat_flag = abs(float(pos_frac)) <= eps
+            elif pos_qty is not None:
+                flat_flag = abs(float(pos_qty)) <= eps
+            else:
+                flat_flag = False
+                warn_once("Missing net_exposure and position fields; flat day counts may be low.")
+
+        if not flat_flag:
+            continue
+        if not has_equity_flat:
+            flat_days_total += 1
+
+        reason = str(record.get("reason", "")).lower()
+        market_state = record.get("market_state") or record.get("trend")
+        market_state = str(market_state) if market_state is not None else ""
+        record_direction_mode = record.get("direction_mode", direction_mode)
+        target_non_zero = target_frac is not None and abs(target_frac) > eps
+
+        if record_direction_mode == "long_only" and raw_dir == "SHORT":
+            flat_due_to_long_only_days += 1
+        elif raw_dir == "LONG" and risk_mode == "RISK_OFF":
+            flat_due_to_risk_off_days += 1
+        elif market_state == "RANGE" or reason.startswith("range_"):
+            flat_due_to_range_days += 1
+        elif target_non_zero and ("execution_gate" in reason or "range_exit_blocked" in reason or "gate_blocked" in reason):
+            flat_due_to_execution_gate_days += 1
+        else:
+            flat_due_to_other_days += 1
+
+    if missing_trade_days:
+        warn_once("Some equity days have no matching trades.jsonl record; diagnostics may be low.")
+
+    return {
+        "raw_dir_long_days": raw_dir_long_days,
+        "raw_dir_short_days": raw_dir_short_days,
+        "risk_on_days": risk_on_days,
+        "risk_neutral_days": risk_neutral_days,
+        "risk_off_days": risk_off_days,
+        "flat_days_total": flat_days_total,
+        "flat_due_to_long_only_days": flat_due_to_long_only_days,
+        "flat_due_to_risk_off_days": flat_due_to_risk_off_days,
+        "flat_due_to_range_days": flat_due_to_range_days,
+        "flat_due_to_execution_gate_days": flat_due_to_execution_gate_days,
+        "flat_due_to_other_days": flat_due_to_other_days,
+        "target_frac_days_0": target_frac_days_0,
+        "target_frac_days_0_5": target_frac_days_0_5,
+        "target_frac_days_1": target_frac_days_1,
+        "target_frac_days_other": target_frac_days_other,
+    }, warnings
+
 def sign(x: float) -> int:
     return 1 if x > 0 else (-1 if x < 0 else 0)
 
@@ -340,8 +552,13 @@ def run_backtest_for_symbol(
             "avg_entry_after": float(avg_entry),
             "realized_pnl": float(realized_pnl),
             "trend": decision["trend"],
+            "trend_dir": decision.get("trend_dir"),
+            "market_state": decision.get("trend"),
             "risk": decision["risk"],
+            "risk_mode": decision["risk"],
             "regime": decision.get("regime", "TREND"),
+            "direction_mode": config.DIRECTION_MODE,
+            "target_pos_frac": float(decision.get("target_pos_frac", target_frac)),
             "action": decision["action"],
             "reason": decision["reason"],
         })
@@ -363,27 +580,6 @@ def run_backtest_for_symbol(
         equity_series,
         starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
     )
-    exposure_diagnostics = compute_exposure_diagnostics(df_day)
-    decision_counts = compute_trade_decision_counts(trades)
-    summary = {
-        "symbol": symbol,
-        "start_date_utc": ms_to_ymd(start_ms),
-        "end_date_utc": ms_to_ymd(end_ms),
-        "starting_cash_usdc": float(config.STARTING_CASH_USDC_PER_SYMBOL),
-        **decision_counts,
-        "win_rate": metrics.trade_win_rate(trades),
-        "fee_bps": float(config.TAKER_FEE_BPS),
-        "layers": {
-            "trend_existence": dict(config.TREND_EXISTENCE),
-            "trend_quality": dict(config.TREND_QUALITY),
-            "execution": dict(config.EXECUTION),
-            "max_position_frac": dict(config.MAX_POSITION_FRAC),
-            "direction_mode": config.DIRECTION_MODE,
-        },
-        **exposure_diagnostics,
-    }
-    summary.update(strategy_metrics)
-
     dates = pd.Index(df_day["date_utc"], name="date_utc")
     close_px = pd.Series(df_day["close_px"].to_numpy(), index=dates, name="close_px")
     if close_px.isna().any():
@@ -399,20 +595,13 @@ def run_backtest_for_symbol(
         bh_equity,
         starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
     )
-    summary.update({
-        "buy_hold_ending_equity_usdc": bh_metrics["ending_equity_usdc"],
-        "buy_hold_total_return": bh_metrics["total_return"],
-        "buy_hold_max_drawdown": bh_metrics["max_drawdown"],
-        "buy_hold_sharpe_ratio": bh_metrics["sharpe_ratio"],
-        "alpha_vs_buy_hold": summary.get("total_return", 0.0) - bh_metrics["total_return"],
-    })
 
     # Write outputs
     sym_dir = run_dir / symbol
     sym_dir.mkdir(parents=True, exist_ok=True)
 
-    write_json(sym_dir / "summary.json", summary)
-    df_day.to_csv(sym_dir / "equity_by_day.csv", index=False)
+    equity_by_day_path = sym_dir / "equity_by_day.csv"
+    df_day.to_csv(equity_by_day_path, index=False)
     pd.DataFrame({
         "date_utc": dates,
         "close_px": close_px.values,
@@ -431,6 +620,44 @@ def run_backtest_for_symbol(
     if trades_path.exists():
         trades_path.unlink()
     append_jsonl(trades_path, trades)
+
+    exposure_diagnostics = compute_exposure_diagnostics(df_day)
+    decision_counts = compute_trade_decision_counts(trades)
+    diagnostic_counts, diagnostic_warnings = compute_diagnostic_counts(
+        trades_path,
+        equity_by_day_path,
+        config.DIRECTION_MODE,
+    )
+    summary = {
+        "symbol": symbol,
+        "start_date_utc": ms_to_ymd(start_ms),
+        "end_date_utc": ms_to_ymd(end_ms),
+        "starting_cash_usdc": float(config.STARTING_CASH_USDC_PER_SYMBOL),
+        **decision_counts,
+        "win_rate": metrics.trade_win_rate(trades),
+        "fee_bps": float(config.TAKER_FEE_BPS),
+        "layers": {
+            "trend_existence": dict(config.TREND_EXISTENCE),
+            "trend_quality": dict(config.TREND_QUALITY),
+            "execution": dict(config.EXECUTION),
+            "max_position_frac": dict(config.MAX_POSITION_FRAC),
+            "direction_mode": config.DIRECTION_MODE,
+        },
+        **exposure_diagnostics,
+        **diagnostic_counts,
+    }
+    summary.update(strategy_metrics)
+    summary.update({
+        "buy_hold_ending_equity_usdc": bh_metrics["ending_equity_usdc"],
+        "buy_hold_total_return": bh_metrics["total_return"],
+        "buy_hold_max_drawdown": bh_metrics["max_drawdown"],
+        "buy_hold_sharpe_ratio": bh_metrics["sharpe_ratio"],
+        "alpha_vs_buy_hold": summary.get("total_return", 0.0) - bh_metrics["total_return"],
+    })
+    if diagnostic_warnings:
+        summary["diagnostics_warning"] = "; ".join(diagnostic_warnings)
+
+    write_json(sym_dir / "summary.json", summary)
 
     return summary
 
