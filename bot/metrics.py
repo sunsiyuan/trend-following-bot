@@ -125,7 +125,9 @@ def trade_win_rate(trades: List[Dict]) -> float:
     wins = 0
     count = 0
     for t in trades:
-        pnl = t.get("realized_pnl")
+        pnl = t.get("realized_pnl_usdc")
+        if pnl is None:
+            pnl = t.get("realized_pnl")
         if pnl is None:
             continue
         count += 1
