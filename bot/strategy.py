@@ -31,6 +31,27 @@ MarketState = Literal["LONG", "SHORT", "RANGE"]
 RiskMode = config.RiskMode
 DirectionMode = config.DirectionMode
 
+DECISION_KEY_DEFAULTS: Dict[str, object] = {
+    "raw_dir": None,
+    "market_state": None,
+    "risk_mode": None,
+    "desired_side": None,
+    "desired_pos_frac": None,
+    "target_pos_frac": None,
+    "regime": None,
+    "action": None,
+    "reason": None,
+    "update_last_exec": None,
+    "direction_mode": None,
+}
+
+def make_decision(**kwargs: object) -> Dict[str, object]:
+    payload = dict(DECISION_KEY_DEFAULTS)
+    payload.update(kwargs)
+    return payload
+
+DECISION_KEYS = tuple(sorted(make_decision().keys()))
+
 @dataclass
 class Position:
     """
@@ -251,13 +272,13 @@ def decide(
 
     Returns a dict:
       {
-        "trend": ...,
-        "risk": ...,
-        "regime": "TREND"|"RANGE",
-        "current_frac": ...,
-        "desired_frac": ...,
-        "target_frac": ...,
+        "raw_dir": ...,
+        "market_state": ...,
+        "risk_mode": ...,
+        "desired_side": ...,
+        "desired_pos_frac": ...,
         "target_pos_frac": ...,
+        "regime": "TREND"|"RANGE",
         "action": "HOLD"|"REBALANCE"|"EXIT",
         "reason": "...",
         "update_last_exec": bool,
@@ -268,35 +289,38 @@ def decide(
     row_1d = _last_row_at_or_before(df_1d_feat, ts_ms)
     row_exec = _last_row_at_or_before(df_exec_feat, ts_ms)
     if row_1d is None or row_exec is None:
-        return {
-            "trend": "INSUFFICIENT_DATA",
-            "risk": "RISK_OFF",
-            "regime": "TREND",
-            "current_frac": state.position.frac,
-            "desired_frac": 0.0,
-            "target_frac": state.position.frac,
-            "target_pos_frac": state.position.frac,
-            "action": "HOLD",
-            "reason": "insufficient_data",
-            "update_last_exec": False,
-        }
+        current = float(state.position.frac)
+        return make_decision(
+            raw_dir=None,
+            market_state=None,
+            risk_mode="RISK_OFF",
+            desired_side=_side_from_frac(0.0),
+            desired_pos_frac=0.0,
+            target_pos_frac=current,
+            regime="TREND",
+            action="HOLD",
+            reason="insufficient_data",
+            update_last_exec=False,
+            direction_mode=config.DIRECTION_MODE,
+        )
 
     current = float(state.position.frac)
     # Stage B: determine market state (LONG/SHORT/RANGE).
     raw_dir = decide_trend_existence(row_1d)
     if raw_dir is None:
-        return {
-            "trend": "INSUFFICIENT_DATA",
-            "risk": "RISK_OFF",
-            "regime": "TREND",
-            "current_frac": current,
-            "desired_frac": 0.0,
-            "target_frac": current,
-            "target_pos_frac": current,
-            "action": "HOLD",
-            "reason": "insufficient_data",
-            "update_last_exec": False,
-        }
+        return make_decision(
+            raw_dir=None,
+            market_state=None,
+            risk_mode="RISK_OFF",
+            desired_side=_side_from_frac(0.0),
+            desired_pos_frac=0.0,
+            target_pos_frac=current,
+            regime="TREND",
+            action="HOLD",
+            reason="insufficient_data",
+            update_last_exec=False,
+            direction_mode=config.DIRECTION_MODE,
+        )
 
     range_regime = is_range_regime(row_1d)
     market_state: MarketState = "RANGE" if range_regime else raw_dir
@@ -337,18 +361,19 @@ def decide(
 
     if abs(desired - current) < eps:
         reason = "range_hold" if market_state == "RANGE" and abs(current) < eps else "already_at_target"
-        return {
-            "trend": market_state,
-            "risk": risk,
-            "regime": regime,
-            "current_frac": current,
-            "desired_frac": desired,
-            "target_frac": current,
-            "target_pos_frac": current,
-            "action": "HOLD",
-            "reason": reason,
-            "update_last_exec": False,
-        }
+        return make_decision(
+            raw_dir=raw_dir,
+            market_state=market_state,
+            risk_mode=risk,
+            desired_side=desired_side,
+            desired_pos_frac=desired,
+            target_pos_frac=current,
+            regime=regime,
+            action="HOLD",
+            reason=reason,
+            update_last_exec=False,
+            direction_mode=config.DIRECTION_MODE,
+        )
 
     # Stage E: choose execution pacing and gate.
     reducing = is_reduction(current, desired)
@@ -364,18 +389,19 @@ def decide(
     allowed = execution_gate_mode(row_exec, raw_dir, exec_bar_idx, state, min_step_bars, require_trend_filter)
     if not allowed:
         reason = "range_exit_blocked" if market_state == "RANGE" and reducing else "execution_gate_blocked"
-        return {
-            "trend": market_state,
-            "risk": risk,
-            "regime": regime,
-            "current_frac": current,
-            "desired_frac": desired,
-            "target_frac": current,
-            "target_pos_frac": current,
-            "action": "HOLD",
-            "reason": reason,
-            "update_last_exec": False,
-        }
+        return make_decision(
+            raw_dir=raw_dir,
+            market_state=market_state,
+            risk_mode=risk,
+            desired_side=desired_side,
+            desired_pos_frac=desired,
+            target_pos_frac=current,
+            regime=regime,
+            action="HOLD",
+            reason=reason,
+            update_last_exec=False,
+            direction_mode=config.DIRECTION_MODE,
+        )
 
     # Stage F: compute smoothed target.
     target = smooth_target(current, desired, max_delta)
@@ -389,16 +415,16 @@ def decide(
         reason = "range_exit" if market_state == "RANGE" and reducing else "gate_passed"
         update_last_exec = True
 
-    return {
-        "trend": market_state,
-        "trend_dir": raw_dir,
-        "risk": risk,
-        "regime": regime,
-        "current_frac": current,
-        "desired_frac": desired,
-        "target_frac": target,
-        "target_pos_frac": target,
-        "action": action,
-        "reason": reason,
-        "update_last_exec": update_last_exec,
-    }
+    return make_decision(
+        raw_dir=raw_dir,
+        market_state=market_state,
+        risk_mode=risk,
+        desired_side=desired_side,
+        desired_pos_frac=desired,
+        target_pos_frac=target,
+        regime=regime,
+        action=action,
+        reason=reason,
+        update_last_exec=update_last_exec,
+        direction_mode=config.DIRECTION_MODE,
+    )

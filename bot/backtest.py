@@ -159,29 +159,6 @@ def compute_diagnostic_counts(
         dates = sorted(trades_by_day.keys())
         days_total = len(dates)
 
-    def get_raw_dir(record: Dict) -> str | None:
-        raw_dir = record.get("raw_dir") or record.get("trend_dir")
-        if raw_dir:
-            return str(raw_dir)
-        trend = record.get("trend")
-        if trend in {"LONG", "SHORT"}:
-            warn_once("raw_dir missing; using trend as fallback for some days.")
-            return trend
-        return None
-
-    def get_risk_mode(record: Dict) -> str | None:
-        risk = record.get("risk_mode") or record.get("risk")
-        return str(risk) if risk is not None else None
-
-    def get_target_frac(record: Dict) -> float | None:
-        for key in ("target_pos_frac", "target_frac", "target_fraction"):
-            if key in record:
-                try:
-                    return float(record[key])
-                except (TypeError, ValueError):
-                    return None
-        return None
-
     raw_dir_long_days = 0
     raw_dir_short_days = 0
     risk_on_days = 0
@@ -213,15 +190,17 @@ def compute_diagnostic_counts(
                 flat_due_to_other_days += 1
             continue
 
-        raw_dir = get_raw_dir(record)
+        raw_dir = record.get("raw_dir")
+        raw_dir = str(raw_dir) if raw_dir is not None else None
         if raw_dir == "LONG":
             raw_dir_long_days += 1
         elif raw_dir == "SHORT":
             raw_dir_short_days += 1
         elif raw_dir is None:
-            warn_once("Missing raw_dir/trend_dir in trades.jsonl; raw_dir counts may be low.")
+            warn_once("Missing raw_dir in trades.jsonl; raw_dir counts may be low.")
 
-        risk_mode = get_risk_mode(record)
+        risk_mode = record.get("risk_mode")
+        risk_mode = str(risk_mode) if risk_mode is not None else None
         if risk_mode == "RISK_ON":
             risk_on_days += 1
         elif risk_mode == "RISK_NEUTRAL":
@@ -229,12 +208,21 @@ def compute_diagnostic_counts(
         elif risk_mode == "RISK_OFF":
             risk_off_days += 1
         elif risk_mode is None:
-            warn_once("Missing risk_mode/risk in trades.jsonl; risk counts may be low.")
+            warn_once("Missing risk_mode in trades.jsonl; risk counts may be low.")
 
-        target_frac = get_target_frac(record)
+        target_frac = record.get("target_pos_frac")
         if target_frac is None:
             target_frac_days_other += 1
             warn_once("Missing target_pos_frac in trades.jsonl; target histogram may be incomplete.")
+        else:
+            try:
+                target_frac = float(target_frac)
+            except (TypeError, ValueError):
+                target_frac = None
+                target_frac_days_other += 1
+                warn_once("Invalid target_pos_frac in trades.jsonl; target histogram may be incomplete.")
+        if target_frac is None:
+            pass
         elif abs(target_frac) <= eps:
             target_frac_days_0 += 1
         elif abs(target_frac - 0.5) <= eps:
@@ -262,7 +250,7 @@ def compute_diagnostic_counts(
             flat_days_total += 1
 
         reason = str(record.get("reason", "")).lower()
-        market_state = record.get("market_state") or record.get("trend")
+        market_state = record.get("market_state")
         market_state = str(market_state) if market_state is not None else ""
         record_direction_mode = record.get("direction_mode", direction_mode)
         target_non_zero = target_frac is not None and abs(target_frac) > eps
@@ -513,50 +501,47 @@ def run_backtest_for_symbol(
             state=state,
         )
 
-        target_value = decision.get("target_frac")
-        if target_value is None:
-            target_value = decision.get("target_pos_frac")
-        target_frac = float(target_value)
-        market_state = decision.get("market_state") or decision.get("trend")
-        raw_dir = decision.get("raw_dir") or decision.get("trend_dir")
-        if raw_dir is None and decision.get("trend") in {"LONG", "SHORT"}:
-            raw_dir = decision.get("trend")
-        risk_mode = decision.get("risk_mode") or decision.get("risk")
+        missing = [key for key in strat.DECISION_KEYS if key not in decision]
+        assert not missing, f"Decision missing keys: {missing}"
+
+        target_frac = float(decision.get("target_pos_frac") or 0.0)
         reason = decision.get("reason") or "already_at_target"
         current_notional = qty * price
+        current_pos_frac = current_notional / equity if abs(equity) > 1e-12 else 0.0
         # Use current equity pre-trade to translate fraction -> notional
         target_notional = target_frac * equity
+        next_pos_frac = target_frac
+        delta_pos_frac = next_pos_frac - current_pos_frac
 
         delta_notional = target_notional - current_notional
         if abs(delta_notional) < 1e-8:
             # no trade
-            position_frac = (qty * price) / equity if abs(equity) > 1e-12 else 0.0
-            trades.append({
+            ts_utc = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).isoformat()
+            record: Dict[str, object] = {}
+            record.update(decision)
+            record.update({
                 "ts_ms": int(ts),
+                "ts_utc": ts_utc,
                 "date_utc": ms_to_ymd(int(ts)),
                 "symbol": symbol,
-                "price": price,
-                "delta_notional": 0.0,
+                "bar_interval": config.TIMEFRAMES["execution"],
+                "action": "HOLD",
+                "close_px": price,
+                "current_pos_frac": float(current_pos_frac),
+                "next_pos_frac": float(current_pos_frac),
+                "delta_pos_frac": 0.0,
+                "delta_notional_usdc": 0.0,
                 "delta_qty": 0.0,
-                "fee": 0.0,
+                "fee_usdc": 0.0,
                 "equity_before": float(equity),
                 "equity_after": float(equity),
                 "position_qty_after": float(qty),
-                "position_frac_after": float(position_frac),
+                "position_frac_after": float(current_pos_frac),
                 "avg_entry_after": float(avg_entry),
-                "realized_pnl": 0.0,
-                "trend": decision.get("trend"),
-                "trend_dir": decision.get("trend_dir"),
-                "raw_dir": raw_dir,
-                "market_state": market_state,
-                "risk": decision.get("risk"),
-                "risk_mode": risk_mode,
-                "regime": decision.get("regime", "TREND"),
-                "direction_mode": config.DIRECTION_MODE,
-                "target_pos_frac": float(target_frac),
-                "action": "HOLD",
+                "realized_pnl_usdc": 0.0,
                 "reason": reason,
             })
+            trades.append(record)
             if decision.get("update_last_exec"):
                 state.last_exec_bar_idx = bar_idx
             continue
@@ -586,32 +571,32 @@ def run_backtest_for_symbol(
         if decision.get("update_last_exec"):
             state.last_exec_bar_idx = bar_idx
 
-        trades.append({
+        ts_utc = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).isoformat()
+        record = {}
+        record.update(decision)
+        record.update({
             "ts_ms": int(ts),
+            "ts_utc": ts_utc,
             "date_utc": ms_to_ymd(int(ts)),
             "symbol": symbol,
-            "price": price,
-            "delta_notional": float(delta_notional),
+            "bar_interval": config.TIMEFRAMES["execution"],
+            "action": decision.get("action", "REBALANCE"),
+            "close_px": price,
+            "current_pos_frac": float(current_pos_frac),
+            "next_pos_frac": float(next_pos_frac),
+            "delta_pos_frac": float(delta_pos_frac),
+            "delta_notional_usdc": float(delta_notional),
             "delta_qty": float(dq),
-            "fee": float(fee),
+            "fee_usdc": float(fee),
             "equity_before": float(equity_before),
             "equity_after": float(equity_after),
             "position_qty_after": float(qty),
             "position_frac_after": float(state.position.frac),
             "avg_entry_after": float(avg_entry),
-            "realized_pnl": float(realized_pnl),
-            "trend": decision.get("trend"),
-            "trend_dir": decision.get("trend_dir"),
-            "raw_dir": raw_dir,
-            "market_state": market_state,
-            "risk": decision.get("risk"),
-            "risk_mode": risk_mode,
-            "regime": decision.get("regime", "TREND"),
-            "direction_mode": config.DIRECTION_MODE,
-            "target_pos_frac": float(target_frac),
-            "action": decision.get("action", "REBALANCE"),
+            "realized_pnl_usdc": float(realized_pnl),
             "reason": reason,
         })
+        trades.append(record)
 
     # record final day
     if last_day and last_mark_price is not None:
