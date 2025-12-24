@@ -7,7 +7,7 @@ Small helpers to compute backtest metrics.
 from __future__ import annotations
 
 import math
-from typing import Dict, List
+from typing import Dict
 
 import pandas as pd
 
@@ -114,21 +114,3 @@ def total_return(equity: pd.Series) -> float:
     if equity.empty:
         return 0.0
     return float(equity.iloc[-1] / equity.iloc[0] - 1.0)
-
-
-def trade_win_rate(trades: List[Dict]) -> float:
-    """
-    Approximate win-rate using per-trade realized PnL snapshots (if provided).
-    """
-    if not trades:
-        return 0.0
-    wins = 0
-    count = 0
-    for t in trades:
-        pnl = t.get("realized_pnl")
-        if pnl is None:
-            continue
-        count += 1
-        if pnl > 0:
-            wins += 1
-    return float(wins / count) if count else 0.0
