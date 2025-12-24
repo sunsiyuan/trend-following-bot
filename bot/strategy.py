@@ -24,17 +24,22 @@ import numpy as np
 import pandas as pd
 
 from bot import config
-from bot.indicators import donchian, log_slope, moving_average
+from bot.indicators import donchian, log_slope, moving_average, quantize_toward_zero
 
 TrendDir = Literal["LONG", "SHORT"]
 MarketState = Literal["LONG", "SHORT"]
-RiskMode = config.RiskMode
 DirectionMode = config.DirectionMode
 
 DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "raw_dir": None,
     "market_state": None,
     "risk_mode": None,
+    "fast_dir": None,
+    "slow_dir": None,
+    "align": None,
+    "z": None,
+    "zq": None,
+    "sigma": None,
     "desired_side": None,
     "desired_pos_frac": None,
     "target_pos_frac": None,
@@ -105,6 +110,29 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     quality_ma_type = tq.get("ma_type", "sma")
     out["quality_ma"] = moving_average(out["close"], tq["window"], quality_ma_type)
     out["quality_ma_prev"] = out["quality_ma"].shift(1)
+    slope_k = int(config.TREND_EXISTENCE.get("slope_k", 2))
+    out["quality_log_slope"] = log_slope(out["quality_ma"], slope_k)
+
+    if te["indicator"] == "ma" and tq["indicator"] == "ma":
+        w_fast = int(config.TREND_EXISTENCE["window"])
+        n_vol = config.vol_window_from_fast_window(w_fast)
+        out["logret"] = np.log(out["close"]).diff()
+        out["sigma"] = out["logret"].rolling(n_vol, min_periods=n_vol).std()
+        out["z"] = (out["trend_log_slope"] - out["quality_log_slope"]) / np.maximum(
+            out["sigma"],
+            config.VOL_EPS,
+        )
+        out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
+        out["align"] = 1.0 - np.abs(np.tanh(out["zq"] / config.ANGLE_SIZING_A))
+        out["align"] = np.clip(out["align"], 0.0, 1.0)
+        nan_mask = out[["trend_log_slope", "quality_log_slope", "sigma"]].isna().any(axis=1)
+        out.loc[nan_mask, "align"] = 1.0
+    else:
+        out["logret"] = np.nan
+        out["sigma"] = np.nan
+        out["z"] = np.nan
+        out["zq"] = np.nan
+        out["align"] = 1.0
     return out
 
 def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
@@ -146,34 +174,16 @@ def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     mid = (upper + lower) / 2.0
     return "LONG" if close >= mid else "SHORT"
 
-def decide_risk_mode(row_1d: pd.Series, trend: TrendDir) -> RiskMode:
-    """
-    Uses 1D MA (quality_ma) with a neutral band to classify risk mode,
-    in a trend-direction-aware way.
-    """
-    close = float(row_1d["close"])
-    qma = row_1d.get("quality_ma", np.nan)
-    if np.isnan(qma):
-        return "RISK_OFF"
-
-    qma = float(qma)
-    band = float(config.TREND_QUALITY["neutral_band_pct"])
-    upper = qma * (1.0 + band)
-    lower = qma * (1.0 - band)
-
-    if trend == "LONG":
-        if close >= upper:
-            return "RISK_ON"
-        if close >= lower:
-            return "RISK_NEUTRAL"
-        return "RISK_OFF"
-
-    # SHORT
-    if close <= lower:
-        return "RISK_ON"
-    if close <= upper:
-        return "RISK_NEUTRAL"
-    return "RISK_OFF"
+def decide_slow_dir(row_1d: pd.Series) -> Optional[TrendDir]:
+    slope = row_1d.get("quality_log_slope", np.nan)
+    if np.isnan(slope):
+        return None
+    slope = float(slope)
+    if slope > 0:
+        return "LONG"
+    if slope < 0:
+        return "SHORT"
+    return None
 
 def execution_gate_mode(
     row_exec: pd.Series,
@@ -200,25 +210,18 @@ def execution_gate_mode(
         return close < exec_ma
     return False
 
-def _apply_direction_mode(trend: TrendDir, direction_mode: DirectionMode) -> TrendDir:
+def compute_desired_target_frac(
+    slow_dir: TrendDir,
+    align: float,
+    direction_mode: DirectionMode,
+) -> float:
+    align = float(np.clip(align, 0.0, 1.0))
     if direction_mode == "both_side":
-        return trend
-    if direction_mode == "long_only" and trend == "SHORT":
-        return "NO_TREND"
-    if direction_mode == "short_only" and trend == "LONG":
-        return "NO_TREND"
-    return trend
-
-def compute_desired_target_frac(trend: TrendDir, risk: RiskMode) -> float:
-    """
-    Desired target position fraction in [-1, 1].
-    """
-    trend = _apply_direction_mode(trend, config.DIRECTION_MODE)
-    frac = float(config.MAX_POSITION_FRAC[risk])
-    if trend == "LONG":
-        return +frac
-    if trend == "SHORT":
-        return -frac
+        return align if slow_dir == "LONG" else -align
+    if direction_mode == "long_only":
+        return align if slow_dir == "LONG" else 0.0
+    if direction_mode == "short_only":
+        return -align if slow_dir == "SHORT" else 0.0
     return 0.0
 
 def smooth_target(current: float, desired: float, max_delta: float) -> float:
@@ -277,7 +280,7 @@ def decide(
         return make_decision(
             raw_dir=None,
             market_state=None,
-            risk_mode="RISK_OFF",
+            risk_mode=None,
             desired_side=_side_from_frac(0.0),
             desired_pos_frac=0.0,
             target_pos_frac=current,
@@ -291,11 +294,12 @@ def decide(
     current = float(state.position.frac)
     # Stage B: determine market state (LONG/SHORT).
     raw_dir = decide_trend_existence(row_1d)
-    if raw_dir is None:
+    slow_dir = decide_slow_dir(row_1d)
+    if slow_dir is None:
         return make_decision(
-            raw_dir=None,
+            raw_dir=raw_dir,
             market_state=None,
-            risk_mode="RISK_OFF",
+            risk_mode=None,
             desired_side=_side_from_frac(0.0),
             desired_pos_frac=0.0,
             target_pos_frac=current,
@@ -306,11 +310,11 @@ def decide(
             direction_mode=config.DIRECTION_MODE,
         )
 
-    market_state: MarketState = raw_dir
+    market_state: MarketState = slow_dir
 
-    # Stage C: decide risk mode and desired target.
-    risk = decide_risk_mode(row_1d, raw_dir)
-    desired = compute_desired_target_frac(raw_dir, risk)
+    # Stage C: decide desired target.
+    align = float(row_1d.get("align", 1.0)) if config.ANGLE_SIZING_ENABLED else 1.0
+    desired = compute_desired_target_frac(slow_dir, align, config.DIRECTION_MODE)
 
     # Stage D: apply flip cooldown logic.
     current_side = _side_from_frac(current)
@@ -343,7 +347,13 @@ def decide(
         return make_decision(
             raw_dir=raw_dir,
             market_state=market_state,
-            risk_mode=risk,
+            risk_mode=None,
+            fast_dir=raw_dir,
+            slow_dir=slow_dir,
+            align=align,
+            z=row_1d.get("z"),
+            zq=row_1d.get("zq"),
+            sigma=row_1d.get("sigma"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -365,13 +375,20 @@ def decide(
         max_delta = float(ex["build_max_delta_frac"])
         require_trend_filter = True
 
-    allowed = execution_gate_mode(row_exec, raw_dir, exec_bar_idx, state, min_step_bars, require_trend_filter)
+    gate_trend = "LONG" if desired > 0 else "SHORT"
+    allowed = execution_gate_mode(row_exec, gate_trend, exec_bar_idx, state, min_step_bars, require_trend_filter)
     if not allowed:
         reason = "execution_gate_blocked"
         return make_decision(
             raw_dir=raw_dir,
             market_state=market_state,
-            risk_mode=risk,
+            risk_mode=None,
+            fast_dir=raw_dir,
+            slow_dir=slow_dir,
+            align=align,
+            z=row_1d.get("z"),
+            zq=row_1d.get("zq"),
+            sigma=row_1d.get("sigma"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -397,7 +414,13 @@ def decide(
     return make_decision(
         raw_dir=raw_dir,
         market_state=market_state,
-        risk_mode=risk,
+        risk_mode=None,
+        fast_dir=raw_dir,
+        slow_dir=slow_dir,
+        align=align,
+        z=row_1d.get("z"),
+        zq=row_1d.get("zq"),
+        sigma=row_1d.get("sigma"),
         desired_side=desired_side,
         desired_pos_frac=desired,
         target_pos_frac=target,

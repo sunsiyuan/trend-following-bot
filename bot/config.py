@@ -155,19 +155,19 @@ EXECUTION: ExecutionCfg = {
 # Risk / sizing
 # -----------------------------
 
-RiskMode = Literal["RISK_ON", "RISK_NEUTRAL", "RISK_OFF"]
 DirectionMode = Literal["long_only", "short_only", "both_side"]
 
-# 风险档位 -> 最大仓位比例
-# 这是“趋势质量层”的输出映射表
-# 调参思路：
-# - 如果你觉得策略“仓位太满导致回撤大”：把 RISK_ON 从 1.0 降到 0.7/0.8
-# - 如果你觉得策略“暴露不够”：先别动这个，优先排查 neutral 判定是否过严
-MAX_POSITION_FRAC: Dict[RiskMode, float] = {
-    "RISK_ON": 1.0,
-    "RISK_NEUTRAL": 0.5,
-    "RISK_OFF": 0.0,  # target=0 means exit（策略里一般应当 reduce-only 到 0）
-}
+ANGLE_SIZING_ENABLED: bool = True
+ANGLE_SIZING_A: float = 2.0
+ANGLE_SIZING_Q: float = 0.2
+VOL_WINDOW_DIV: float = 2.5
+VOL_WINDOW_MIN: int = 15
+VOL_WINDOW_MAX: int = 40
+VOL_EPS: float = 1e-12
+
+def vol_window_from_fast_window(w_fast: int) -> int:
+    n = int(round(w_fast / VOL_WINDOW_DIV))
+    return max(VOL_WINDOW_MIN, min(VOL_WINDOW_MAX, n))
 
 # 方向模式：你当前为了贴近 BTC 大周期而用 long_only
 # 调参思路（关键认知）：

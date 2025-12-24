@@ -68,3 +68,16 @@ def donchian(high: pd.Series, low: pd.Series, window: int) -> Tuple[pd.Series, p
     upper = high.rolling(window, min_periods=window).max().shift(1)
     lower = low.rolling(window, min_periods=window).min().shift(1)
     return upper, lower
+
+def quantize_toward_zero(x: pd.Series, q: float) -> pd.Series:
+    """
+    Quantize toward zero: sign(x) * floor(abs(x)/q) * q
+    Preserves NaNs and index alignment.
+    """
+    if q <= 0:
+        raise ValueError("q must be positive")
+    values = x.to_numpy(dtype=float)
+    abs_vals = np.abs(values)
+    floored = np.floor(abs_vals / q) * q
+    quantized = np.sign(values) * floored
+    return pd.Series(quantized, index=x.index, name=x.name)
