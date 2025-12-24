@@ -167,7 +167,6 @@ def compute_diagnostic_counts(
     flat_days_total = 0
     flat_due_to_long_only_days = 0
     flat_due_to_risk_off_days = 0
-    flat_due_to_range_days = 0
     flat_due_to_execution_gate_days = 0
     flat_due_to_other_days = 0
     target_frac_days_0 = 0
@@ -259,9 +258,7 @@ def compute_diagnostic_counts(
             flat_due_to_long_only_days += 1
         elif raw_dir == "LONG" and risk_mode == "RISK_OFF":
             flat_due_to_risk_off_days += 1
-        elif market_state == "RANGE" or reason.startswith("range_"):
-            flat_due_to_range_days += 1
-        elif target_non_zero and ("execution_gate" in reason or "range_exit_blocked" in reason or "gate_blocked" in reason):
+        elif target_non_zero and ("execution_gate" in reason or "gate_blocked" in reason):
             flat_due_to_execution_gate_days += 1
         else:
             flat_due_to_other_days += 1
@@ -287,7 +284,6 @@ def compute_diagnostic_counts(
         "flat_days_total": flat_days_total,
         "flat_due_to_long_only_days": flat_due_to_long_only_days,
         "flat_due_to_risk_off_days": flat_due_to_risk_off_days,
-        "flat_due_to_range_days": flat_due_to_range_days,
         "flat_due_to_execution_gate_days": flat_due_to_execution_gate_days,
         "flat_due_to_other_days": flat_due_to_other_days,
         "target_frac_days_0": target_frac_days_0,
@@ -720,7 +716,6 @@ def main() -> None:
         "TREND_EXISTENCE": dict(config.TREND_EXISTENCE),
         "TREND_QUALITY": dict(config.TREND_QUALITY),
         "EXECUTION": dict(config.EXECUTION),
-        "RANGE": dict(config.RANGE),
         "MAX_POSITION_FRAC": dict(config.MAX_POSITION_FRAC),
         "DIRECTION_MODE": config.DIRECTION_MODE,
         "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,

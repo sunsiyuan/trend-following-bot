@@ -26,7 +26,7 @@ QUOTE_ASSET: str = "USDC"
 # 交易标的列表（perp 默认 coin 名：BTC/ETH/SOL...）
 # 调参思路：
 # - 先只跑 1 个（BTC），保证策略语义/统计口径/数据对齐没问题
-# - 再扩到 ETH、SOL；最后才考虑山寨（因为噪声与跳空更高，range 判定更难）
+# - 再扩到 ETH、SOL；最后才考虑山寨（因为噪声与跳空更高）
 SYMBOLS: List[str] = ["BTC", "ETH", "SOL"]
 
 # 市场类型：v1 默认 perp
@@ -60,8 +60,7 @@ MAType = Literal["sma", "ema"]
 
 class TrendExistenceCfg(TypedDict):
     # 趋势存在层：回答“现在应该偏多/偏空/还是不参与？”
-    # 注意：你后来已经把语义收敛成 3 类（TREND_UP / TREND_DOWN / RANGE）
-    # 那么这里的 indicator/window 影响的是“趋势信号出现的频率与稳定性”
+    # indicator/window 影响的是“趋势信号出现的频率与稳定性”
     indicator: IndicatorType
     timeframe: str
     window: int
@@ -103,36 +102,6 @@ class ExecutionCfg(TypedDict):
 
     reduce_min_step_bars: int
     reduce_max_delta_frac: float
-
-class RangeCfg(TypedDict):
-    # RANGE 判定层（是否把当前市场视为“震荡/无趋势”）
-    # 注意：range 的存在非常容易导致“暴露不足”：
-    # - 过于严格 => 大量时间被判为 range，长期持有拿不到大波段
-    # - 过于宽松 => 趋势/震荡都在交易，回撤和换手会增大
-    #
-    # enabled：允许你快速做 A/B（range 开/关）
-    enabled: bool
-
-    # ma_fast/ma_slow：用于判断“是否缠绕/收敛/无趋势”的快慢均线
-    # 调参建议：
-    # - fast 通常和 TREND_EXISTENCE window 同级别（你现在是 15）
-    # - slow 通常和 TREND_QUALITY window 同级别（你现在是 50）
-    ma_fast_window: int
-    ma_slow_window: int
-
-    # price_band_pct：价格围绕某个基准（通常是 slow MA 或中轴）在多窄的区间内算震荡
-    # - 越小：越容易判 trend（更少 range）
-    # - 越大：越容易判 range（更少暴露）
-    price_band_pct: float
-
-    # ma_band_pct：快慢 MA 之间的距离小于多少算“均线缠绕”
-    # - 这是 range 判定里最直接的“趋势强度” proxy
-    ma_band_pct: float
-
-    # slope_band_pct：均线斜率绝对值低于多少算“走平”（无趋势）
-    # - 越小：需要更“平”才算 range（更激进）
-    # - 越大：更容易判 range（更保守）
-    slope_band_pct: float
 
 # -----------------------------
 # Layer defaults
@@ -181,19 +150,6 @@ EXECUTION: ExecutionCfg = {
     "reduce_max_delta_frac": 0.5,
 }
 
-# RANGE：默认开启
-# 你现在的主要任务之一其实就是“让 range 判定合理”，否则长期暴露不足
-# 建议的调参顺序（非常实用）：
-# 1) 先关掉 slope_band_pct，只用 ma_band_pct + price_band_pct 观察 range 天数/收益变化
-# 2) 再逐步引入 slope_band_pct 做去噪
-RANGE: RangeCfg = {
-    "enabled": True,
-    "ma_fast_window": 15,
-    "ma_slow_window": 50,
-    "price_band_pct": 0.02,
-    "ma_band_pct": 0.012,
-    "slope_band_pct": 0.0025,
-}
 
 # -----------------------------
 # Risk / sizing
@@ -206,7 +162,7 @@ DirectionMode = Literal["long_only", "short_only", "both_side"]
 # 这是“趋势质量层”的输出映射表
 # 调参思路：
 # - 如果你觉得策略“仓位太满导致回撤大”：把 RISK_ON 从 1.0 降到 0.7/0.8
-# - 如果你觉得策略“暴露不够”：先别动这个，优先排查 range/neutral 判定是否过严
+# - 如果你觉得策略“暴露不够”：先别动这个，优先排查 neutral 判定是否过严
 MAX_POSITION_FRAC: Dict[RiskMode, float] = {
     "RISK_ON": 1.0,
     "RISK_NEUTRAL": 0.5,
@@ -217,7 +173,7 @@ MAX_POSITION_FRAC: Dict[RiskMode, float] = {
 # 调参思路（关键认知）：
 # - long_only 会天然提升表现（因为长期上行偏置），但这不是“纯趋势策略的普适性证明”
 # - both_side 才能检验“熊市/反转期是否能保护回撤”
-# - 所以：你可以先 long_only 把 range/暴露问题调顺，再切 both_side 验证稳健性
+# - 所以：你可以先 long_only 把暴露问题调顺，再切 both_side 验证稳健性
 DIRECTION_MODE: DirectionMode = "long_only"
 
 # -----------------------------

@@ -27,7 +27,7 @@ from bot import config
 from bot.indicators import donchian, log_slope, moving_average
 
 TrendDir = Literal["LONG", "SHORT"]
-MarketState = Literal["LONG", "SHORT", "RANGE"]
+MarketState = Literal["LONG", "SHORT"]
 RiskMode = config.RiskMode
 DirectionMode = config.DirectionMode
 
@@ -86,10 +86,6 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     Adds columns needed for 1D decisions, based on config.
     """
     out = df_1d.copy()
-    range_cfg = config.RANGE
-    out["ma_fast_for_state"] = moving_average(out["close"], int(range_cfg["ma_fast_window"]))
-    out["ma_slow_for_state"] = moving_average(out["close"], int(range_cfg["ma_slow_window"]))
-    out["ma_slow_prev_for_state"] = out["ma_slow_for_state"].shift(1)
     # Trend existence
     te = config.TREND_EXISTENCE
     if te["indicator"] == "ma":
@@ -204,28 +200,6 @@ def execution_gate_mode(
         return close < exec_ma
     return False
 
-def is_range_regime(row_1d: pd.Series) -> bool:
-    range_cfg = config.RANGE
-    if not range_cfg["enabled"]:
-        return False
-
-    close = float(row_1d["close"])
-    ma_fast = row_1d.get("ma_fast_for_state", np.nan)
-    ma_slow = row_1d.get("ma_slow_for_state", np.nan)
-    ma_slow_prev = row_1d.get("ma_slow_prev_for_state", np.nan)
-
-    if np.isnan(ma_fast) or np.isnan(ma_slow):
-        return False
-
-    price_near_ma = abs(close - float(ma_slow)) / float(ma_slow) <= float(range_cfg["price_band_pct"])
-    ma_converged = abs(float(ma_fast) - float(ma_slow)) / float(ma_slow) <= float(range_cfg["ma_band_pct"])
-
-    low_slope = False
-    if not np.isnan(ma_slow_prev):
-        low_slope = abs(float(ma_slow) - float(ma_slow_prev)) / float(ma_slow) <= float(range_cfg["slope_band_pct"])
-
-    return (price_near_ma and ma_converged) or (price_near_ma and low_slope)
-
 def _apply_direction_mode(trend: TrendDir, direction_mode: DirectionMode) -> TrendDir:
     if direction_mode == "both_side":
         return trend
@@ -288,7 +262,7 @@ def decide(
         "desired_side": ...,
         "desired_pos_frac": ...,
         "target_pos_frac": ...,
-        "regime": "TREND"|"RANGE",
+        "regime": "TREND",
         "action": "HOLD"|"REBALANCE"|"EXIT",
         "reason": "...",
         "update_last_exec": bool,
@@ -315,7 +289,7 @@ def decide(
         )
 
     current = float(state.position.frac)
-    # Stage B: determine market state (LONG/SHORT/RANGE).
+    # Stage B: determine market state (LONG/SHORT).
     raw_dir = decide_trend_existence(row_1d)
     if raw_dir is None:
         return make_decision(
@@ -332,16 +306,11 @@ def decide(
             direction_mode=config.DIRECTION_MODE,
         )
 
-    range_regime = is_range_regime(row_1d)
-    market_state: MarketState = "RANGE" if range_regime else raw_dir
+    market_state: MarketState = raw_dir
 
     # Stage C: decide risk mode and desired target.
-    if market_state == "RANGE":
-        risk = "RISK_OFF"
-        desired = 0.0
-    else:
-        risk = decide_risk_mode(row_1d, raw_dir)
-        desired = compute_desired_target_frac(raw_dir, risk)
+    risk = decide_risk_mode(row_1d, raw_dir)
+    desired = compute_desired_target_frac(raw_dir, risk)
 
     # Stage D: apply flip cooldown logic.
     current_side = _side_from_frac(current)
@@ -367,10 +336,10 @@ def decide(
         desired = 0.0
         desired_side = "FLAT"
 
-    regime = "RANGE" if market_state == "RANGE" else "TREND"
+    regime = "TREND"
 
     if abs(desired - current) < eps:
-        reason = "range_hold" if market_state == "RANGE" and abs(current) < eps else "already_at_target"
+        reason = "already_at_target"
         return make_decision(
             raw_dir=raw_dir,
             market_state=market_state,
@@ -398,7 +367,7 @@ def decide(
 
     allowed = execution_gate_mode(row_exec, raw_dir, exec_bar_idx, state, min_step_bars, require_trend_filter)
     if not allowed:
-        reason = "range_exit_blocked" if market_state == "RANGE" and reducing else "execution_gate_blocked"
+        reason = "execution_gate_blocked"
         return make_decision(
             raw_dir=raw_dir,
             market_state=market_state,
@@ -418,11 +387,11 @@ def decide(
 
     if abs(target - current) < eps:
         action = "HOLD"
-        reason = "range_hold" if market_state == "RANGE" and abs(current) < eps else "already_at_target"
+        reason = "already_at_target"
         update_last_exec = False
     else:
         action = "REBALANCE"
-        reason = "range_exit" if market_state == "RANGE" and reducing else "gate_passed"
+        reason = "gate_passed"
         update_last_exec = True
 
     return make_decision(
