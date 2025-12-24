@@ -33,6 +33,8 @@ DirectionMode = config.DirectionMode
 
 DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "raw_dir": None,
+    "trend_slope": None,
+    "trend_is_weak": False,
     "market_state": None,
     "risk_mode": None,
     "desired_side": None,
@@ -43,6 +45,8 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "reason": None,
     "update_last_exec": None,
     "direction_mode": None,
+    "effective_dir": None,
+    "build_allowed": True,
 }
 
 def make_decision(**kwargs: object) -> Dict[str, object]:
@@ -244,6 +248,9 @@ def _side_from_frac(frac: float) -> Literal["LONG", "SHORT", "FLAT"]:
         return "FLAT"
     return "LONG" if frac > 0 else "SHORT"
 
+def _is_weak_trend(slope: float, db_pos: float, db_neg: float) -> bool:
+    return (-db_neg <= slope <= db_pos)
+
 def decide(
     ts_ms: int,
     exec_bar_idx: int,
@@ -276,6 +283,8 @@ def decide(
         current = float(state.position.frac)
         return make_decision(
             raw_dir=None,
+            trend_slope=None,
+            trend_is_weak=False,
             market_state=None,
             risk_mode="RISK_OFF",
             desired_side=_side_from_frac(0.0),
@@ -286,6 +295,8 @@ def decide(
             reason="insufficient_data",
             update_last_exec=False,
             direction_mode=config.DIRECTION_MODE,
+            effective_dir=None,
+            build_allowed=True,
         )
 
     current = float(state.position.frac)
@@ -294,6 +305,8 @@ def decide(
     if raw_dir is None:
         return make_decision(
             raw_dir=None,
+            trend_slope=None,
+            trend_is_weak=False,
             market_state=None,
             risk_mode="RISK_OFF",
             desired_side=_side_from_frac(0.0),
@@ -304,16 +317,36 @@ def decide(
             reason="insufficient_data",
             update_last_exec=False,
             direction_mode=config.DIRECTION_MODE,
+            effective_dir=None,
+            build_allowed=True,
         )
 
     market_state: MarketState = raw_dir
 
     # Stage C: decide risk mode and desired target.
-    risk = decide_risk_mode(row_1d, raw_dir)
-    desired = compute_desired_target_frac(raw_dir, risk)
+    te = config.TREND_EXISTENCE
+    slope_val = row_1d.get("trend_log_slope", np.nan) if te["indicator"] == "ma" else np.nan
+    trend_slope = float(slope_val) if not np.isnan(slope_val) else None
+    deadband_pos = float(te.get("deadband_pos", 0.0))
+    deadband_neg = float(te.get("deadband_neg", 0.0))
+    weak = bool(trend_slope is not None and _is_weak_trend(trend_slope, deadband_pos, deadband_neg))
+    current_side = _side_from_frac(current)
+
+    effective_dir: TrendDir = raw_dir
+    build_allowed = True
+    if weak:
+        build_allowed = False
+        if current_side != "FLAT":
+            effective_dir = current_side
+
+    if weak and current_side == "FLAT":
+        risk = "RISK_OFF"
+        desired = 0.0
+    else:
+        risk = decide_risk_mode(row_1d, effective_dir)
+        desired = compute_desired_target_frac(effective_dir, risk)
 
     # Stage D: apply flip cooldown logic.
-    current_side = _side_from_frac(current)
     desired_side = _side_from_frac(desired)
     ex = config.EXECUTION
 
@@ -342,6 +375,8 @@ def decide(
         reason = "already_at_target"
         return make_decision(
             raw_dir=raw_dir,
+            trend_slope=trend_slope,
+            trend_is_weak=weak,
             market_state=market_state,
             risk_mode=risk,
             desired_side=desired_side,
@@ -352,10 +387,31 @@ def decide(
             reason=reason,
             update_last_exec=False,
             direction_mode=config.DIRECTION_MODE,
+            effective_dir=effective_dir,
+            build_allowed=build_allowed,
         )
 
     # Stage E: choose execution pacing and gate.
     reducing = is_reduction(current, desired)
+    if (not build_allowed) and (not reducing):
+        reason = "deadband_no_build"
+        return make_decision(
+            raw_dir=raw_dir,
+            trend_slope=trend_slope,
+            trend_is_weak=weak,
+            market_state=market_state,
+            risk_mode=risk,
+            desired_side=desired_side,
+            desired_pos_frac=desired,
+            target_pos_frac=current,
+            regime=regime,
+            action="HOLD",
+            reason=reason,
+            update_last_exec=False,
+            direction_mode=config.DIRECTION_MODE,
+            effective_dir=effective_dir,
+            build_allowed=build_allowed,
+        )
     if reducing:
         min_step_bars = int(ex["reduce_min_step_bars"])
         max_delta = float(ex["reduce_max_delta_frac"])
@@ -370,6 +426,8 @@ def decide(
         reason = "execution_gate_blocked"
         return make_decision(
             raw_dir=raw_dir,
+            trend_slope=trend_slope,
+            trend_is_weak=weak,
             market_state=market_state,
             risk_mode=risk,
             desired_side=desired_side,
@@ -380,6 +438,8 @@ def decide(
             reason=reason,
             update_last_exec=False,
             direction_mode=config.DIRECTION_MODE,
+            effective_dir=effective_dir,
+            build_allowed=build_allowed,
         )
 
     # Stage F: compute smoothed target.
@@ -396,6 +456,8 @@ def decide(
 
     return make_decision(
         raw_dir=raw_dir,
+        trend_slope=trend_slope,
+        trend_is_weak=weak,
         market_state=market_state,
         risk_mode=risk,
         desired_side=desired_side,
@@ -406,4 +468,6 @@ def decide(
         reason=reason,
         update_last_exec=update_last_exec,
         direction_mode=config.DIRECTION_MODE,
+        effective_dir=effective_dir,
+        build_allowed=build_allowed,
     )

@@ -66,6 +66,8 @@ class TrendExistenceCfg(TypedDict):
     window: int
     ma_type: NotRequired[MAType]
     slope_k: NotRequired[int]
+    deadband_pos: NotRequired[float]
+    deadband_neg: NotRequired[float]
 
 class TrendQualityCfg(TypedDict):
     # 趋势质量层：回答“最多可以给多大仓位？”
@@ -117,6 +119,8 @@ TREND_EXISTENCE: TrendExistenceCfg = {
     "window": 15,
     "ma_type": "ema",
     "slope_k": 2,
+    "deadband_pos": 0.001,
+    "deadband_neg": 0.001,
 }
 
 # 趋势质量层默认：MA(1d, 50) + neutral band
