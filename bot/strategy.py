@@ -35,7 +35,9 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "market_state": None,
     "risk_mode": None,
     "fast_dir": None,
+    "fast_sign": None,
     "slow_dir": None,
+    "slow_sign": None,
     "align": None,
     "sigma_price": None,
     "sigma_mismatch_mean": None,
@@ -132,11 +134,19 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
             config.VOL_EPS,
         )
         out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
-        slow_sign = np.where(
-            out["quality_log_slope"] > 0,
+        fast_slope = out["trend_log_slope"]
+        slow_slope = out["quality_log_slope"]
+        out["fast_sign"] = np.where(
+            fast_slope > 0,
             1.0,
-            np.where(out["quality_log_slope"] < 0, -1.0, np.nan),
+            np.where(fast_slope < 0, -1.0, np.where(fast_slope.isna(), np.nan, 0.0)),
         )
+        slow_sign = np.where(
+            slow_slope > 0,
+            1.0,
+            np.where(slow_slope < 0, -1.0, np.where(slow_slope.isna(), np.nan, 0.0)),
+        )
+        out["slow_sign"] = slow_sign
         out["z_dir"] = slow_sign * out["z"]
         out["penalty"] = np.maximum(0.0, -out["z_dir"])
         out["penalty_q"] = np.floor(out["penalty"] / config.ANGLE_SIZING_Q) * config.ANGLE_SIZING_Q
@@ -149,7 +159,6 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
                 "sigma_price",
                 "sigma_mismatch_mean",
                 "z",
-                "z_dir",
             ]
         ].isna().any(axis=1)
         out.loc[nan_mask, "align"] = 1.0
@@ -160,6 +169,8 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         out["sigma_mismatch_mean"] = np.nan
         out["z"] = np.nan
         out["zq"] = np.nan
+        out["fast_sign"] = np.nan
+        out["slow_sign"] = np.nan
         out["z_dir"] = np.nan
         out["penalty"] = np.nan
         out["penalty_q"] = np.nan
@@ -216,6 +227,15 @@ def decide_slow_dir(row_1d: pd.Series) -> Optional[TrendDir]:
         return "SHORT"
     return None
 
+def _dir_from_sign(sign: float) -> Optional[TrendDir]:
+    if np.isnan(sign):
+        return None
+    if sign > 0:
+        return "LONG"
+    if sign < 0:
+        return "SHORT"
+    return None
+
 def execution_gate_mode(
     row_exec: pd.Series,
     trend: TrendDir,
@@ -242,17 +262,19 @@ def execution_gate_mode(
     return False
 
 def compute_desired_target_frac(
-    slow_dir: TrendDir,
+    fast_sign: float,
     align: float,
     direction_mode: DirectionMode,
 ) -> float:
     align = float(np.clip(align, 0.0, 1.0))
+    if np.isnan(fast_sign) or fast_sign == 0:
+        return 0.0
     if direction_mode == "both_side":
-        return align if slow_dir == "LONG" else -align
+        return float(fast_sign) * align
     if direction_mode == "long_only":
-        return align if slow_dir == "LONG" else 0.0
+        return align if fast_sign > 0 else 0.0
     if direction_mode == "short_only":
-        return -align if slow_dir == "SHORT" else 0.0
+        return -align if fast_sign < 0 else 0.0
     return 0.0
 
 def smooth_target(current: float, desired: float, max_delta: float) -> float:
@@ -325,27 +347,15 @@ def decide(
     current = float(state.position.frac)
     # Stage B: determine market state (LONG/SHORT).
     raw_dir = decide_trend_existence(row_1d)
-    slow_dir = decide_slow_dir(row_1d)
-    if slow_dir is None:
-        return make_decision(
-            raw_dir=raw_dir,
-            market_state=None,
-            risk_mode=None,
-            desired_side=_side_from_frac(0.0),
-            desired_pos_frac=0.0,
-            target_pos_frac=current,
-            regime="TREND",
-            action="HOLD",
-            reason="insufficient_data",
-            update_last_exec=False,
-            direction_mode=config.DIRECTION_MODE,
-        )
-
-    market_state: MarketState = slow_dir
+    fast_sign = float(row_1d.get("fast_sign", np.nan))
+    slow_sign = float(row_1d.get("slow_sign", np.nan))
+    fast_dir = _dir_from_sign(fast_sign)
+    slow_dir = _dir_from_sign(slow_sign)
+    market_state: Optional[MarketState] = fast_dir
 
     # Stage C: decide desired target.
     align = float(row_1d.get("align", 1.0)) if config.ANGLE_SIZING_ENABLED else 1.0
-    desired = compute_desired_target_frac(slow_dir, align, config.DIRECTION_MODE)
+    desired = compute_desired_target_frac(fast_sign, align, config.DIRECTION_MODE)
 
     # Stage D: apply flip cooldown logic.
     current_side = _side_from_frac(current)
@@ -379,8 +389,10 @@ def decide(
             raw_dir=raw_dir,
             market_state=market_state,
             risk_mode=None,
-            fast_dir=raw_dir,
+            fast_dir=fast_dir,
+            fast_sign=fast_sign,
             slow_dir=slow_dir,
+            slow_sign=slow_sign,
             align=align,
             sigma_price=row_1d.get("sigma_price"),
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
@@ -418,8 +430,10 @@ def decide(
             raw_dir=raw_dir,
             market_state=market_state,
             risk_mode=None,
-            fast_dir=raw_dir,
+            fast_dir=fast_dir,
+            fast_sign=fast_sign,
             slow_dir=slow_dir,
+            slow_sign=slow_sign,
             align=align,
             sigma_price=row_1d.get("sigma_price"),
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
@@ -454,8 +468,10 @@ def decide(
         raw_dir=raw_dir,
         market_state=market_state,
         risk_mode=None,
-        fast_dir=raw_dir,
+        fast_dir=fast_dir,
+        fast_sign=fast_sign,
         slow_dir=slow_dir,
+        slow_sign=slow_sign,
         align=align,
         sigma_price=row_1d.get("sigma_price"),
         sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
