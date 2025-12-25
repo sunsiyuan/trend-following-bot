@@ -67,6 +67,38 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 # -----------------------------
+# Hyperliquid data constraints
+# -----------------------------
+
+def get_earliest_possible_ts_ms(symbol: str) -> Optional[int]:
+    return config.HYPERLIQUID_EARLIEST_KLINES_TS_MS.get(symbol)
+
+def compute_api_window_start_ts_ms(
+    timeframe: str,
+    end_ts_ms: Optional[int],
+    limit: int = config.HYPERLIQUID_KLINE_MAX_LIMIT,
+) -> int:
+    end_ms = end_ts_ms if end_ts_ms is not None else now_ms()
+    timeframe_ms = interval_to_ms(timeframe)
+    return int(end_ms - limit * timeframe_ms)
+
+def get_cache_earliest_ts_ms(symbol: str, interval: str) -> Optional[int]:
+    path = market_data_path(symbol, interval)
+    rows = read_jsonl(path)
+    if not rows:
+        return None
+    min_open: Optional[int] = None
+    for row in rows:
+        if "t" not in row:
+            continue
+        try:
+            open_ts = int(row["t"])
+        except (TypeError, ValueError):
+            continue
+        min_open = open_ts if min_open is None else min(min_open, open_ts)
+    return min_open
+
+# -----------------------------
 # Cache paths / JSONL helpers
 # -----------------------------
 
@@ -270,19 +302,88 @@ def load_klines_df_from_cache(symbol: str, interval: str) -> pd.DataFrame:
     df = df.set_index("close_ts")
     return df
 
-def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: int) -> pd.DataFrame:
+def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Optional[int]) -> pd.DataFrame:
+    requested_start_ts_ms = int(start_ms)
+    requested_end_ts_ms = int(end_ms) if end_ms is not None else now_ms()
+
+    cache_earliest_ts_ms = get_cache_earliest_ts_ms(symbol, interval)
+    earliest_fact_ts_ms = get_earliest_possible_ts_ms(symbol)
+    api_window_start_ts_ms = compute_api_window_start_ts_ms(interval, requested_end_ts_ms)
+
+    effective_start_ts_ms = requested_start_ts_ms
+    skip_download = False
+
+    if interval == "1d" and earliest_fact_ts_ms is not None and requested_start_ts_ms < earliest_fact_ts_ms:
+        effective_start_ts_ms = earliest_fact_ts_ms
+        log.warning({
+            "event": "REQUEST_BEFORE_ABSOLUTE_EARLIEST",
+            "level": "WARNING",
+            "symbol": symbol,
+            "timeframe": interval,
+            "requested_start_ts_ms": requested_start_ts_ms,
+            "requested_end_ts_ms": requested_end_ts_ms,
+            "earliest_fact_ts_ms": earliest_fact_ts_ms,
+            "cache_earliest_ts_ms": cache_earliest_ts_ms,
+            "effective_start_ts_ms": effective_start_ts_ms,
+        })
+        if cache_earliest_ts_ms is not None and cache_earliest_ts_ms <= earliest_fact_ts_ms:
+            skip_download = True
+            log.info({
+                "event": "REQUEST_BEFORE_ABSOLUTE_EARLIEST",
+                "level": "INFO",
+                "symbol": symbol,
+                "timeframe": interval,
+                "requested_start_ts_ms": requested_start_ts_ms,
+                "requested_end_ts_ms": requested_end_ts_ms,
+                "earliest_fact_ts_ms": earliest_fact_ts_ms,
+                "cache_earliest_ts_ms": cache_earliest_ts_ms,
+                "effective_start_ts_ms": effective_start_ts_ms,
+                "action": "SKIP_DOWNLOAD_ABSOLUTE_EARLIEST_REACHED",
+            })
+
+    if requested_start_ts_ms < api_window_start_ts_ms:
+        effective_start_ts_ms = max(effective_start_ts_ms, api_window_start_ts_ms)
+        log.warning({
+            "event": "REQUEST_BEFORE_API_WINDOW",
+            "level": "WARNING",
+            "symbol": symbol,
+            "timeframe": interval,
+            "requested_start_ts_ms": requested_start_ts_ms,
+            "requested_end_ts_ms": requested_end_ts_ms,
+            "api_window_start_ts_ms": api_window_start_ts_ms,
+            "cache_earliest_ts_ms": cache_earliest_ts_ms,
+            "effective_start_ts_ms": effective_start_ts_ms,
+            "limit": config.HYPERLIQUID_KLINE_MAX_LIMIT,
+        })
+        if cache_earliest_ts_ms is not None and cache_earliest_ts_ms <= api_window_start_ts_ms:
+            skip_download = True
+            log.info({
+                "event": "REQUEST_BEFORE_API_WINDOW",
+                "level": "INFO",
+                "symbol": symbol,
+                "timeframe": interval,
+                "requested_start_ts_ms": requested_start_ts_ms,
+                "requested_end_ts_ms": requested_end_ts_ms,
+                "api_window_start_ts_ms": api_window_start_ts_ms,
+                "cache_earliest_ts_ms": cache_earliest_ts_ms,
+                "effective_start_ts_ms": effective_start_ts_ms,
+                "limit": config.HYPERLIQUID_KLINE_MAX_LIMIT,
+                "action": "SKIP_DOWNLOAD_API_WINDOW_REACHED",
+            })
+
     df = load_klines_df_from_cache(symbol, interval)
 
-    if df.empty:
-        download_history_to_cache(symbol, interval, start_ms, end_ms)
-        df = load_klines_df_from_cache(symbol, interval)
-    else:
-        min_open = int(df["open_ts"].min())
-        max_close = int(df.index.max())  # close_ts
-
-        need_download = (min_open > start_ms) or (max_close < end_ms)
-        if need_download:
-            download_history_to_cache(symbol, interval, start_ms, end_ms)
+    if not skip_download:
+        if df.empty:
+            download_history_to_cache(symbol, interval, effective_start_ts_ms, requested_end_ts_ms)
             df = load_klines_df_from_cache(symbol, interval)
+        else:
+            min_open = int(df["open_ts"].min())
+            max_close = int(df.index.max())  # close_ts
 
-    return df.loc[(df.index >= start_ms) & (df.index <= end_ms)].copy()
+            need_download = (min_open > effective_start_ts_ms) or (max_close < requested_end_ts_ms)
+            if need_download:
+                download_history_to_cache(symbol, interval, effective_start_ts_ms, requested_end_ts_ms)
+                df = load_klines_df_from_cache(symbol, interval)
+
+    return df.loc[(df.index >= requested_start_ts_ms) & (df.index <= requested_end_ts_ms)].copy()

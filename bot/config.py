@@ -200,6 +200,12 @@ BACKTEST_RESULT_DIR: str = f"{DATA_DIR}/backtest_result"
 # Hyperliquid public API
 HL_INFO_URL: str = "https://api.hyperliquid.xyz/info"
 
+# Hyperliquid data constraints
+# For BTC 1d, data earlier than this openTime does not exist on Hyperliquid.
+HYPERLIQUID_EARLIEST_KLINES_TS_MS: Dict[str, int] = {"BTC": 1_597_795_200_000}
+# candleSnapshot only exposes the most recent N klines per timeframe.
+HYPERLIQUID_KLINE_MAX_LIMIT: int = 5_000
+
 def fee_rate_from_bps(bps: float) -> float:
     # bps -> fraction
     # 10 bps = 0.1% = 0.001
