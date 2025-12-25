@@ -59,6 +59,50 @@ def sharpe_ratio_from_daily_returns(
     return float(excess.mean() / std * math.sqrt(periods_per_year))
 
 
+def equity_returns_with_first_zero(equity: ArrayLike) -> np.ndarray:
+    values = _to_equity_array(equity)
+    if values.size == 0:
+        return np.array([], dtype="float64")
+    returns = np.zeros_like(values)
+    prev = values[:-1]
+    curr = values[1:]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        returns[1:] = np.where(prev == 0, 0.0, curr / prev - 1.0)
+    return returns
+
+
+def sharpe_annualized_from_returns(
+    returns: ArrayLike,
+    periods_per_year: int = 365,
+) -> float:
+    values = _to_equity_array(returns)
+    if values.size == 0:
+        return float("nan")
+    std = values.std(ddof=0)
+    if std == 0:
+        return float("nan")
+    return float(values.mean() / std * math.sqrt(periods_per_year))
+
+
+def mdd_and_ulcer_index(equity: ArrayLike) -> tuple[float, float]:
+    values = _to_equity_array(equity)
+    if values.size == 0:
+        return float("nan"), float("nan")
+    running_max = np.maximum.accumulate(values)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dd_series = values / running_max - 1.0
+        dd_depth = 1.0 - values / running_max
+    mdd = float(np.min(dd_series)) if dd_series.size else float("nan")
+    ui = float(np.sqrt(np.mean(dd_depth**2))) if dd_depth.size else float("nan")
+    return mdd, ui
+
+
+def annualized_return(start: float, end: float, days: int) -> float:
+    if days <= 0 or start <= 0:
+        return float("nan")
+    return float((end / start) ** (365.0 / days) - 1.0)
+
+
 def ulcer_index(equity: ArrayLike) -> float:
     values = _to_equity_array(equity)
     if values.size < 2:
