@@ -114,9 +114,9 @@ class ExecutionCfg(TypedDict):
 TREND_EXISTENCE: TrendExistenceCfg = {
     "indicator": "ma",  # "ma" or "donchian"
     "timeframe": TIMEFRAMES["trend"],
-    "window": 30,
+    "window": 15,
     "ma_type": "ema",
-    "slope_k": 2,
+    "slope_k": 3,
 }
 
 # 趋势质量层默认：MA(1d, 50) + neutral band
@@ -126,7 +126,7 @@ TREND_EXISTENCE: TrendExistenceCfg = {
 TREND_QUALITY: TrendQualityCfg = {
     "indicator": "ma",
     "timeframe": TIMEFRAMES["trend"],
-    "window": 99,             # e.g. 50 or 90（50 更灵敏；90 更慢更稳）
+    "window": 50,             # e.g. 50 or 90（50 更灵敏；90 更慢更稳）
     "neutral_band_pct": 0.025, # +/-1% band around MA
 }
 
@@ -174,7 +174,7 @@ def vol_window_from_fast_window(w_fast: int) -> int:
 # - long_only 会天然提升表现（因为长期上行偏置），但这不是“纯趋势策略的普适性证明”
 # - both_side 才能检验“熊市/反转期是否能保护回撤”
 # - 所以：你可以先 long_only 把暴露问题调顺，再切 both_side 验证稳健性
-DIRECTION_MODE: DirectionMode = "long_only"
+DIRECTION_MODE: DirectionMode = "both_side"
 
 # -----------------------------
 # Backtest settings
@@ -202,7 +202,14 @@ HL_INFO_URL: str = "https://api.hyperliquid.xyz/info"
 
 # Hyperliquid data constraints
 # For BTC 1d, data earlier than this openTime does not exist on Hyperliquid.
-HYPERLIQUID_EARLIEST_KLINES_TS_MS: Dict[str, int] = {"BTC": 1_597_795_200_000}
+HYPERLIQUID_EARLIEST_KLINES_TS_MS: Dict[str, int] = {
+    "BTC": 1_597_795_200_000,
+    "ETH": 1_597_795_200_000,
+    "SOL": 1_600_041_600_000,
+    "HYPE": 1_733_356_800_000,
+    "DOGE": 1_597_795_200_000,
+    "AAVE": 1_603_238_400_000,
+}
 # candleSnapshot only exposes the most recent N klines per timeframe.
 HYPERLIQUID_KLINE_MAX_LIMIT: int = 5_000
 
