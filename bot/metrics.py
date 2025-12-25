@@ -6,11 +6,24 @@ Small helpers to compute backtest metrics.
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import Dict
 
+import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike
 
+log = logging.getLogger(__name__)
+
+
+def _to_equity_array(equity: ArrayLike) -> np.ndarray:
+    if isinstance(equity, pd.Series):
+        values = equity.to_numpy(dtype="float64", copy=False)
+    else:
+        values = np.asarray(equity, dtype="float64")
+    values = values[np.isfinite(values)]
+    return values
 
 def max_drawdown_from_equity(equity: pd.Series) -> float:
     """
@@ -44,6 +57,50 @@ def sharpe_ratio_from_daily_returns(
     if len(excess) < 2 or std <= 1e-12:
         return 0.0
     return float(excess.mean() / std * math.sqrt(periods_per_year))
+
+
+def ulcer_index(equity: ArrayLike) -> float:
+    values = _to_equity_array(equity)
+    if values.size < 2:
+        return 0.0
+    if np.any(values <= 0):
+        positives = values[values > 0]
+        if positives.size < 2:
+            log.warning("Ulcer index requires positive equity values; returning 0.0.")
+            return 0.0
+        log.warning("Ulcer index skipping non-positive equity values.")
+        values = positives
+    running_max = np.maximum.accumulate(values)
+    drawdowns = values / running_max - 1.0
+    return float(np.sqrt(np.mean(drawdowns**2)))
+
+
+def ulcer_performance_index(equity: ArrayLike) -> float:
+    values = _to_equity_array(equity)
+    if values.size < 2:
+        return 0.0
+    if np.any(values <= 0):
+        positives = values[values > 0]
+        if positives.size < 2:
+            log.warning("Ulcer performance index requires positive equity values; returning 0.0.")
+            return 0.0
+        log.warning("Ulcer performance index skipping non-positive equity values.")
+        values = positives
+    total_ret = values[-1] / values[0] - 1.0
+    ui = ulcer_index(values)
+    if ui == 0.0:
+        if total_ret > 0:
+            return float("inf")
+        if total_ret < 0:
+            return float("-inf")
+        return 0.0
+    return float(total_ret / ui)
+
+
+def safe_float_for_json(value: float) -> float | str:
+    if isinstance(value, float) and not math.isfinite(value):
+        return "inf" if value > 0 else "-inf"
+    return value
 
 
 def build_buy_hold_curve(
@@ -82,6 +139,8 @@ def compute_equity_metrics(
             "total_return": 0.0,
             "max_drawdown": 0.0,
             "sharpe_ratio": 0.0,
+            "ulcer_index": 0.0,
+            "ulcer_performance_index": 0.0,
         }
 
     ending_equity = float(equity.iloc[-1])
@@ -91,12 +150,16 @@ def compute_equity_metrics(
         daily_returns_from_equity(equity),
         rf_annual=rf_annual,
     )
+    ui = ulcer_index(equity)
+    upi = ulcer_performance_index(equity)
 
     return {
         "ending_equity_usdc": ending_equity,
         "total_return": float(total_return),
         "max_drawdown": float(max_drawdown),
         "sharpe_ratio": float(sharpe_ratio),
+        "ulcer_index": float(ui),
+        "ulcer_performance_index": float(upi),
     }
 
 

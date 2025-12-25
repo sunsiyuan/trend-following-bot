@@ -685,8 +685,17 @@ def run_backtest_for_symbol(
         "buy_hold_total_return": bh_metrics["total_return"],
         "buy_hold_max_drawdown": bh_metrics["max_drawdown"],
         "buy_hold_sharpe_ratio": bh_metrics["sharpe_ratio"],
+        "buy_hold_ulcer_index": bh_metrics["ulcer_index"],
+        "buy_hold_ulcer_performance_index": bh_metrics["ulcer_performance_index"],
         "alpha_vs_buy_hold": summary.get("total_return", 0.0) - bh_metrics["total_return"],
     })
+    if "ulcer_performance_index" in summary:
+        summary["ulcer_performance_index"] = metrics.safe_float_for_json(
+            summary["ulcer_performance_index"],
+        )
+    summary["buy_hold_ulcer_performance_index"] = metrics.safe_float_for_json(
+        summary["buy_hold_ulcer_performance_index"],
+    )
     if diagnostic_warnings:
         summary["diagnostics_warning"] = "; ".join(diagnostic_warnings)
 
