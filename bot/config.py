@@ -114,7 +114,7 @@ class ExecutionCfg(TypedDict):
 TREND_EXISTENCE: TrendExistenceCfg = {
     "indicator": "ma",  # "ma" or "donchian"
     "timeframe": TIMEFRAMES["trend"],
-    "window": 15,
+    "window": 30,
     "ma_type": "ema",
     "slope_k": 2,
 }
@@ -126,8 +126,8 @@ TREND_EXISTENCE: TrendExistenceCfg = {
 TREND_QUALITY: TrendQualityCfg = {
     "indicator": "ma",
     "timeframe": TIMEFRAMES["trend"],
-    "window": 50,             # e.g. 50 or 90（50 更灵敏；90 更慢更稳）
-    "neutral_band_pct": 0.01, # +/-1% band around MA
+    "window": 99,             # e.g. 50 or 90（50 更灵敏；90 更慢更稳）
+    "neutral_band_pct": 0.025, # +/-1% band around MA
 }
 
 # 执行层默认：MA(4h, 7) + 平滑仓位变化
@@ -143,11 +143,11 @@ EXECUTION: ExecutionCfg = {
 
     # 加仓：更谨慎（减少追高/噪声），所以冷却更长、单次幅度更小
     "build_min_step_bars": 2,       # e.g. 3 bars on 4h => 12 hours（注：这里是 2 => 8h）
-    "build_max_delta_frac": 0.25,   # <=25% of full target per exec
+    "build_max_delta_frac": 0.5,   # <=25% of full target per exec
 
     # 减仓：更果断（避免回撤扩大），所以允许更快更大
     "reduce_min_step_bars": 1,
-    "reduce_max_delta_frac": 0.5,
+    "reduce_max_delta_frac": 1.0,
 }
 
 
@@ -186,7 +186,7 @@ STARTING_CASH_USDC_PER_SYMBOL: float = 10_000.0
 # 手续费（bps）
 # 强烈建议尽早填真实值，不然 trade_count 很高时，回测会严重乐观
 # 调参思路：先用 taker 费率做 worst-case，再考虑 maker/滑点模型
-TAKER_FEE_BPS: float = 0.0  # e.g., 3.5 bps => 3.5
+TAKER_FEE_BPS: float = 4.5  # e.g., 3.5 bps => 3.5
 
 # -----------------------------
 # Data / storage
