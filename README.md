@@ -35,6 +35,10 @@ data/backtest_result/{run_id}/{symbol}/equity_by_day.csv
 data/backtest_result/{run_id}/{symbol}/trades.jsonl
 ```
 
+`summary.json` includes core performance metrics such as total return, max drawdown, Sharpe,
+Ulcer Index (RMS of percent drawdowns from peak), and Ulcer Performance Index (total return
+divided by ulcer index).
+
 Market data cache (JSONL):
 
 ```
