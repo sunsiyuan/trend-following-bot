@@ -29,6 +29,7 @@ import pandas as pd
 from bot import config
 from bot import data_client
 from bot import metrics
+from bot.quarterly_stats import generate_quarterly_stats
 from bot import strategy as strat
 
 logging.basicConfig(
@@ -637,11 +638,12 @@ def run_backtest_for_symbol(
 
     equity_by_day_path = sym_dir / "equity_by_day.csv"
     df_day.to_csv(equity_by_day_path, index=False)
+    equity_by_day_bh_path = sym_dir / "equity_by_day_bh.csv"
     pd.DataFrame({
         "date_utc": dates,
         "close_px": close_px.values,
         "bh_equity": bh_equity.values,
-    }).to_csv(sym_dir / "equity_by_day_bh.csv", index=False)
+    }).to_csv(equity_by_day_bh_path, index=False)
     if "net_exposure" in df_day.columns:
         pd.DataFrame({
             "date_utc": dates,
@@ -700,6 +702,19 @@ def run_backtest_for_symbol(
         summary["diagnostics_warning"] = "; ".join(diagnostic_warnings)
 
     write_json(sym_dir / "summary.json", summary)
+
+    strategy_label = (
+        summary.get("layers", {}).get("direction_mode")
+        or getattr(config, "DIRECTION_MODE", None)
+        or "long_only"
+    )
+    generate_quarterly_stats(
+        equity_by_day_path=equity_by_day_path,
+        equity_by_day_bh_path=equity_by_day_bh_path,
+        trades_path=trades_path,
+        output_path=sym_dir / "quarterly_stats.csv",
+        strategy_label=strategy_label,
+    )
 
     return summary
 
