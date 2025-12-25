@@ -161,18 +161,18 @@ def compute_diagnostic_counts(
 
     raw_dir_long_days = 0
     raw_dir_short_days = 0
-    risk_on_days = 0
-    risk_neutral_days = 0
-    risk_off_days = 0
     flat_days_total = 0
     flat_due_to_long_only_days = 0
-    flat_due_to_risk_off_days = 0
     flat_due_to_execution_gate_days = 0
     flat_due_to_other_days = 0
     target_frac_days_0 = 0
     target_frac_days_0_5 = 0
     target_frac_days_1 = 0
     target_frac_days_other = 0
+    days_align_ge_0_3 = 0
+    days_align_ge_0_7 = 0
+    abs_target_sum = 0.0
+    abs_target_days = 0
 
     eps = 1e-6
     missing_trade_days = 0
@@ -198,16 +198,20 @@ def compute_diagnostic_counts(
         elif raw_dir is None:
             warn_once("Missing raw_dir in trades.jsonl; raw_dir counts may be low.")
 
-        risk_mode = record.get("risk_mode")
-        risk_mode = str(risk_mode) if risk_mode is not None else None
-        if risk_mode == "RISK_ON":
-            risk_on_days += 1
-        elif risk_mode == "RISK_NEUTRAL":
-            risk_neutral_days += 1
-        elif risk_mode == "RISK_OFF":
-            risk_off_days += 1
-        elif risk_mode is None:
-            warn_once("Missing risk_mode in trades.jsonl; risk counts may be low.")
+        align_val = record.get("align")
+        if align_val is None:
+            warn_once("Missing align in trades.jsonl; align diagnostics may be low.")
+        else:
+            try:
+                align_val = float(align_val)
+            except (TypeError, ValueError):
+                align_val = None
+                warn_once("Invalid align in trades.jsonl; align diagnostics may be low.")
+        if align_val is not None:
+            if align_val >= 0.3:
+                days_align_ge_0_3 += 1
+            if align_val >= 0.7:
+                days_align_ge_0_7 += 1
 
         target_frac = record.get("target_pos_frac")
         if target_frac is None:
@@ -230,6 +234,9 @@ def compute_diagnostic_counts(
             target_frac_days_1 += 1
         else:
             target_frac_days_other += 1
+        if target_frac is not None:
+            abs_target_sum += abs(float(target_frac))
+            abs_target_days += 1
 
         flat_flag = flat_by_day.get(day)
         if flat_flag is None:
@@ -254,10 +261,8 @@ def compute_diagnostic_counts(
         record_direction_mode = record.get("direction_mode", direction_mode)
         target_non_zero = target_frac is not None and abs(target_frac) > eps
 
-        if record_direction_mode == "long_only" and raw_dir == "SHORT":
+        if record_direction_mode == "long_only" and market_state == "SHORT":
             flat_due_to_long_only_days += 1
-        elif raw_dir == "LONG" and risk_mode == "RISK_OFF":
-            flat_due_to_risk_off_days += 1
         elif target_non_zero and ("execution_gate" in reason or "gate_blocked" in reason):
             flat_due_to_execution_gate_days += 1
         else:
@@ -278,18 +283,17 @@ def compute_diagnostic_counts(
     return {
         "raw_dir_long_days": raw_dir_long_days,
         "raw_dir_short_days": raw_dir_short_days,
-        "risk_on_days": risk_on_days,
-        "risk_neutral_days": risk_neutral_days,
-        "risk_off_days": risk_off_days,
         "flat_days_total": flat_days_total,
         "flat_due_to_long_only_days": flat_due_to_long_only_days,
-        "flat_due_to_risk_off_days": flat_due_to_risk_off_days,
         "flat_due_to_execution_gate_days": flat_due_to_execution_gate_days,
         "flat_due_to_other_days": flat_due_to_other_days,
         "target_frac_days_0": target_frac_days_0,
         "target_frac_days_0_5": target_frac_days_0_5,
         "target_frac_days_1": target_frac_days_1,
         "target_frac_days_other": target_frac_days_other,
+        "days_align_ge_0_3": days_align_ge_0_3,
+        "days_align_ge_0_7": days_align_ge_0_7,
+        "avg_abs_target": (abs_target_sum / abs_target_days) if abs_target_days else 0.0,
         "diagnostics_sanity": {
             "raw_dir_days_covered": raw_dir_days_covered,
             "target_frac_days_covered": target_frac_days_covered,
@@ -670,7 +674,6 @@ def run_backtest_for_symbol(
             "trend_existence": dict(config.TREND_EXISTENCE),
             "trend_quality": dict(config.TREND_QUALITY),
             "execution": dict(config.EXECUTION),
-            "max_position_frac": dict(config.MAX_POSITION_FRAC),
             "direction_mode": config.DIRECTION_MODE,
         },
         **exposure_diagnostics,
@@ -716,7 +719,6 @@ def main() -> None:
         "TREND_EXISTENCE": dict(config.TREND_EXISTENCE),
         "TREND_QUALITY": dict(config.TREND_QUALITY),
         "EXECUTION": dict(config.EXECUTION),
-        "MAX_POSITION_FRAC": dict(config.MAX_POSITION_FRAC),
         "DIRECTION_MODE": config.DIRECTION_MODE,
         "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
         "TAKER_FEE_BPS": config.TAKER_FEE_BPS,

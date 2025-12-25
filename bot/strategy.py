@@ -24,17 +24,35 @@ import numpy as np
 import pandas as pd
 
 from bot import config
-from bot.indicators import donchian, log_slope, moving_average
+from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
 TrendDir = Literal["LONG", "SHORT"]
 MarketState = Literal["LONG", "SHORT"]
-RiskMode = config.RiskMode
 DirectionMode = config.DirectionMode
 
 DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "raw_dir": None,
     "market_state": None,
     "risk_mode": None,
+    "fast_dir": None,
+    "fast_sign": None,
+    "slow_dir": None,
+    "slow_sign": None,
+    "hlc3": None,
+    "ema_fast": None,
+    "ema_slow": None,
+    "fast_state": None,
+    "slow_state": None,
+    "s_fast": None,
+    "s_slow": None,
+    "align": None,
+    "sigma_price": None,
+    "sigma_mismatch_mean": None,
+    "z": None,
+    "zq": None,
+    "z_dir": None,
+    "penalty": None,
+    "penalty_q": None,
     "desired_side": None,
     "desired_pos_frac": None,
     "target_pos_frac": None,
@@ -86,12 +104,17 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     Adds columns needed for 1D decisions, based on config.
     """
     out = df_1d.copy()
+    close = out["close"]
+    high = out["high"] if "high" in out.columns else None
+    low = out["low"] if "low" in out.columns else None
+    out["hlc3"] = hlc3(high, low, close)
+    price_series = out["hlc3"]
     # Trend existence
     te = config.TREND_EXISTENCE
     if te["indicator"] == "ma":
         ma_type = te.get("ma_type", "sma")
         slope_k = int(te.get("slope_k", 2))
-        out["trend_ma"] = moving_average(out["close"], te["window"], ma_type)
+        out["trend_ma"] = moving_average(price_series, te["window"], ma_type)
         out["trend_log_slope"] = log_slope(out["trend_ma"], slope_k)
     elif te["indicator"] == "donchian":
         upper, lower = donchian(out["high"], out["low"], te["window"])
@@ -103,8 +126,76 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     # Trend quality
     tq = config.TREND_QUALITY
     quality_ma_type = tq.get("ma_type", "sma")
-    out["quality_ma"] = moving_average(out["close"], tq["window"], quality_ma_type)
+    out["quality_ma"] = moving_average(price_series, tq["window"], quality_ma_type)
     out["quality_ma_prev"] = out["quality_ma"].shift(1)
+    slope_k = int(config.TREND_EXISTENCE.get("slope_k", 2))
+    out["quality_log_slope"] = log_slope(out["quality_ma"], slope_k)
+
+    if te["indicator"] == "ma" and tq["indicator"] == "ma":
+        w_fast = int(config.TREND_EXISTENCE["window"])
+        n_vol = config.vol_window_from_fast_window(w_fast)
+        out["logret"] = np.log(price_series).diff()
+        out["delta"] = out["trend_log_slope"] - out["quality_log_slope"]
+        out["sigma_price"] = out["logret"].rolling(n_vol, min_periods=n_vol).std()
+        alpha_f = 2.0 / (float(config.TREND_EXISTENCE["window"]) + 1.0)
+        alpha_s = 2.0 / (float(config.TREND_QUALITY["window"]) + 1.0)
+        vf = alpha_f / (2.0 - alpha_f) + alpha_s / (2.0 - alpha_s)
+        out["sigma_mismatch_mean"] = out["sigma_price"] * np.sqrt(vf) / np.sqrt(float(slope_k))
+        out["z"] = out["delta"] / np.maximum(
+            out["sigma_mismatch_mean"],
+            config.VOL_EPS,
+        )
+        out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
+        out["fast_state"] = np.log(out["hlc3"]) - np.log(out["trend_ma"])
+        out["slow_state"] = np.log(out["hlc3"]) - np.log(out["quality_ma"])
+        out["fast_sign"] = np.where(
+            out["fast_state"] > 0,
+            1.0,
+            np.where(out["fast_state"] < 0, -1.0, np.where(out["fast_state"].isna(), np.nan, 0.0)),
+        )
+        slow_sign = np.where(
+            out["slow_state"] > 0,
+            1.0,
+            np.where(out["slow_state"] < 0, -1.0, np.where(out["slow_state"].isna(), np.nan, 0.0)),
+        )
+        out["slow_sign"] = slow_sign
+        out["z_dir"] = slow_sign * out["z"]
+        out["penalty"] = np.maximum(0.0, -out["z_dir"])
+        out["penalty_q"] = np.floor(out["penalty"] / config.ANGLE_SIZING_Q) * config.ANGLE_SIZING_Q
+        out["align"] = 1.0 - np.tanh(out["penalty_q"] / config.ANGLE_SIZING_A)
+        out["align"] = np.clip(out["align"], 0.0, 1.0)
+        nan_mask = out[
+            [
+                "hlc3",
+                "trend_ma",
+                "quality_ma",
+                "trend_log_slope",
+                "quality_log_slope",
+                "sigma_price",
+                "sigma_mismatch_mean",
+                "z",
+                "fast_state",
+                "slow_state",
+                "fast_sign",
+                "slow_sign",
+            ]
+        ].isna().any(axis=1)
+        out.loc[nan_mask, "align"] = 1.0
+    else:
+        out["logret"] = np.nan
+        out["delta"] = np.nan
+        out["sigma_price"] = np.nan
+        out["sigma_mismatch_mean"] = np.nan
+        out["z"] = np.nan
+        out["zq"] = np.nan
+        out["fast_state"] = np.nan
+        out["slow_state"] = np.nan
+        out["fast_sign"] = np.nan
+        out["slow_sign"] = np.nan
+        out["z_dir"] = np.nan
+        out["penalty"] = np.nan
+        out["penalty_q"] = np.nan
+        out["align"] = 1.0
     return out
 
 def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
@@ -119,7 +210,7 @@ def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
 
 def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     te = config.TREND_EXISTENCE
-    close = float(row_1d["close"])
+    close = float(row_1d.get("hlc3", row_1d["close"]))
 
     if te["indicator"] == "ma":
         slope = row_1d.get("trend_log_slope", np.nan)
@@ -146,34 +237,25 @@ def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     mid = (upper + lower) / 2.0
     return "LONG" if close >= mid else "SHORT"
 
-def decide_risk_mode(row_1d: pd.Series, trend: TrendDir) -> RiskMode:
-    """
-    Uses 1D MA (quality_ma) with a neutral band to classify risk mode,
-    in a trend-direction-aware way.
-    """
-    close = float(row_1d["close"])
-    qma = row_1d.get("quality_ma", np.nan)
-    if np.isnan(qma):
-        return "RISK_OFF"
+def decide_slow_dir(row_1d: pd.Series) -> Optional[TrendDir]:
+    slope = row_1d.get("quality_log_slope", np.nan)
+    if np.isnan(slope):
+        return None
+    slope = float(slope)
+    if slope > 0:
+        return "LONG"
+    if slope < 0:
+        return "SHORT"
+    return None
 
-    qma = float(qma)
-    band = float(config.TREND_QUALITY["neutral_band_pct"])
-    upper = qma * (1.0 + band)
-    lower = qma * (1.0 - band)
-
-    if trend == "LONG":
-        if close >= upper:
-            return "RISK_ON"
-        if close >= lower:
-            return "RISK_NEUTRAL"
-        return "RISK_OFF"
-
-    # SHORT
-    if close <= lower:
-        return "RISK_ON"
-    if close <= upper:
-        return "RISK_NEUTRAL"
-    return "RISK_OFF"
+def _dir_from_sign(sign: float) -> Optional[TrendDir]:
+    if np.isnan(sign):
+        return None
+    if sign > 0:
+        return "LONG"
+    if sign < 0:
+        return "SHORT"
+    return None
 
 def execution_gate_mode(
     row_exec: pd.Series,
@@ -200,25 +282,20 @@ def execution_gate_mode(
         return close < exec_ma
     return False
 
-def _apply_direction_mode(trend: TrendDir, direction_mode: DirectionMode) -> TrendDir:
+def compute_desired_target_frac(
+    fast_sign: float,
+    align: float,
+    direction_mode: DirectionMode,
+) -> float:
+    align = float(np.clip(align, 0.0, 1.0))
+    if np.isnan(fast_sign) or fast_sign == 0:
+        return 0.0
     if direction_mode == "both_side":
-        return trend
-    if direction_mode == "long_only" and trend == "SHORT":
-        return "NO_TREND"
-    if direction_mode == "short_only" and trend == "LONG":
-        return "NO_TREND"
-    return trend
-
-def compute_desired_target_frac(trend: TrendDir, risk: RiskMode) -> float:
-    """
-    Desired target position fraction in [-1, 1].
-    """
-    trend = _apply_direction_mode(trend, config.DIRECTION_MODE)
-    frac = float(config.MAX_POSITION_FRAC[risk])
-    if trend == "LONG":
-        return +frac
-    if trend == "SHORT":
-        return -frac
+        return float(fast_sign) * align
+    if direction_mode == "long_only":
+        return align if fast_sign > 0 else 0.0
+    if direction_mode == "short_only":
+        return -align if fast_sign < 0 else 0.0
     return 0.0
 
 def smooth_target(current: float, desired: float, max_delta: float) -> float:
@@ -277,7 +354,7 @@ def decide(
         return make_decision(
             raw_dir=None,
             market_state=None,
-            risk_mode="RISK_OFF",
+            risk_mode=None,
             desired_side=_side_from_frac(0.0),
             desired_pos_frac=0.0,
             target_pos_frac=current,
@@ -291,26 +368,15 @@ def decide(
     current = float(state.position.frac)
     # Stage B: determine market state (LONG/SHORT).
     raw_dir = decide_trend_existence(row_1d)
-    if raw_dir is None:
-        return make_decision(
-            raw_dir=None,
-            market_state=None,
-            risk_mode="RISK_OFF",
-            desired_side=_side_from_frac(0.0),
-            desired_pos_frac=0.0,
-            target_pos_frac=current,
-            regime="TREND",
-            action="HOLD",
-            reason="insufficient_data",
-            update_last_exec=False,
-            direction_mode=config.DIRECTION_MODE,
-        )
+    fast_sign = float(row_1d.get("fast_sign", np.nan))
+    slow_sign = float(row_1d.get("slow_sign", np.nan))
+    fast_dir = _dir_from_sign(fast_sign)
+    slow_dir = _dir_from_sign(slow_sign)
+    market_state: Optional[MarketState] = fast_dir
 
-    market_state: MarketState = raw_dir
-
-    # Stage C: decide risk mode and desired target.
-    risk = decide_risk_mode(row_1d, raw_dir)
-    desired = compute_desired_target_frac(raw_dir, risk)
+    # Stage C: decide desired target.
+    align = float(row_1d.get("align", 1.0)) if config.ANGLE_SIZING_ENABLED else 1.0
+    desired = compute_desired_target_frac(fast_sign, align, config.DIRECTION_MODE)
 
     # Stage D: apply flip cooldown logic.
     current_side = _side_from_frac(current)
@@ -343,7 +409,26 @@ def decide(
         return make_decision(
             raw_dir=raw_dir,
             market_state=market_state,
-            risk_mode=risk,
+            risk_mode=None,
+            fast_dir=fast_dir,
+            fast_sign=fast_sign,
+            slow_dir=slow_dir,
+            slow_sign=slow_sign,
+            hlc3=row_1d.get("hlc3"),
+            ema_fast=row_1d.get("trend_ma"),
+            ema_slow=row_1d.get("quality_ma"),
+            fast_state=row_1d.get("fast_state"),
+            slow_state=row_1d.get("slow_state"),
+            s_fast=row_1d.get("trend_log_slope"),
+            s_slow=row_1d.get("quality_log_slope"),
+            align=align,
+            sigma_price=row_1d.get("sigma_price"),
+            sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
+            z=row_1d.get("z"),
+            zq=row_1d.get("zq"),
+            z_dir=row_1d.get("z_dir"),
+            penalty=row_1d.get("penalty"),
+            penalty_q=row_1d.get("penalty_q"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -365,13 +450,48 @@ def decide(
         max_delta = float(ex["build_max_delta_frac"])
         require_trend_filter = True
 
-    allowed = execution_gate_mode(row_exec, raw_dir, exec_bar_idx, state, min_step_bars, require_trend_filter)
+    gate_trend: Optional[TrendDir] = None
+    if desired > 0:
+        gate_trend = "LONG"
+    elif desired < 0:
+        gate_trend = "SHORT"
+
+    if require_trend_filter and gate_trend is None:
+        allowed = False
+    else:
+        allowed = execution_gate_mode(
+            row_exec,
+            gate_trend or "LONG",
+            exec_bar_idx,
+            state,
+            min_step_bars,
+            require_trend_filter,
+        )
     if not allowed:
         reason = "execution_gate_blocked"
         return make_decision(
             raw_dir=raw_dir,
             market_state=market_state,
-            risk_mode=risk,
+            risk_mode=None,
+            fast_dir=fast_dir,
+            fast_sign=fast_sign,
+            slow_dir=slow_dir,
+            slow_sign=slow_sign,
+            hlc3=row_1d.get("hlc3"),
+            ema_fast=row_1d.get("trend_ma"),
+            ema_slow=row_1d.get("quality_ma"),
+            fast_state=row_1d.get("fast_state"),
+            slow_state=row_1d.get("slow_state"),
+            s_fast=row_1d.get("trend_log_slope"),
+            s_slow=row_1d.get("quality_log_slope"),
+            align=align,
+            sigma_price=row_1d.get("sigma_price"),
+            sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
+            z=row_1d.get("z"),
+            zq=row_1d.get("zq"),
+            z_dir=row_1d.get("z_dir"),
+            penalty=row_1d.get("penalty"),
+            penalty_q=row_1d.get("penalty_q"),
             desired_side=desired_side,
             desired_pos_frac=desired,
             target_pos_frac=current,
@@ -397,7 +517,26 @@ def decide(
     return make_decision(
         raw_dir=raw_dir,
         market_state=market_state,
-        risk_mode=risk,
+        risk_mode=None,
+        fast_dir=fast_dir,
+        fast_sign=fast_sign,
+        slow_dir=slow_dir,
+        slow_sign=slow_sign,
+        hlc3=row_1d.get("hlc3"),
+        ema_fast=row_1d.get("trend_ma"),
+        ema_slow=row_1d.get("quality_ma"),
+        fast_state=row_1d.get("fast_state"),
+        slow_state=row_1d.get("slow_state"),
+        s_fast=row_1d.get("trend_log_slope"),
+        s_slow=row_1d.get("quality_log_slope"),
+        align=align,
+        sigma_price=row_1d.get("sigma_price"),
+        sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
+        z=row_1d.get("z"),
+        zq=row_1d.get("zq"),
+        z_dir=row_1d.get("z_dir"),
+        penalty=row_1d.get("penalty"),
+        penalty_q=row_1d.get("penalty_q"),
         desired_side=desired_side,
         desired_pos_frac=desired,
         target_pos_frac=target,
