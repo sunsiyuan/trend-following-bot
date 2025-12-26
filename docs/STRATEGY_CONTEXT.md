@@ -14,6 +14,22 @@ Strategy intent is not explicitly declared in code; names and flow suggest a tre
 输入与输出的“契约”如下（仅基于代码）：输入为多时间尺度K线数据（含close/高低价等字段），输出为目标仓位比例（target_pos_frac，范围逻辑为-1..+1）与动作意图（HOLD/REBALANCE）。  
 The input/output “contract” is as follows (code-only): inputs are multi-timeframe candles (including close/high/low fields), outputs are a target position fraction (target_pos_frac, logically -1..+1) and an action intent (HOLD/REBALANCE).
 
+## Backtest Experiment Contract / 回测实验契约
+
+**中文**
+
+- **时间边界语义**：回测裁剪固定为 start inclusive、end exclusive（使用 `backtest_store.slice_bars` 基于 `open_ts`/`close_ts` 裁剪）。回测侧不允许 `now()` 裁剪。  
+- **data_fingerprint（低配 manifest）**：每个 timeframe 生成 manifest，字段固定为 `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`，并通过 `stable_json` + `sha256` 生成 `data_fingerprint`。  
+- **param_hash**：`BacktestParams.to_hashable_dict` 只包含影响结果的参数；`stable_json` 后 sha256 得到 `param_hash`。  
+- **run_id 格式**：默认 `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`，CLI 可用 `--run_id` 覆盖。  
+
+**English**
+
+- **Time boundary semantics**: slicing is start-inclusive, end-exclusive via `backtest_store.slice_bars` using `open_ts`/`close_ts`. No `now()` trimming in backtest slicing.  
+- **data_fingerprint (minimal manifest)**: each timeframe emits a manifest with fields `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`, hashed via `stable_json` + `sha256`.  
+- **param_hash**: `BacktestParams.to_hashable_dict` includes only result-affecting params; `stable_json` + sha256 yields `param_hash`.  
+- **run_id format**: default is `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`, overridable via CLI `--run_id`.  
+
 ## 数据与时间粒度 / Data & Timeframe
 策略计算使用的字段包括：close（所有路径），high/low（HLC3与Donchian路径），其它字段如open/volume/trades未在信号计算中使用。  
 Fields used in strategy calculations include: close (all paths), high/low (HLC3 and Donchian paths); other fields like open/volume/trades are not used in signal calculations.
