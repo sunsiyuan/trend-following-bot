@@ -32,6 +32,20 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **strategy_version**: `STRATEGY_VERSION` in `bot/strategy.py` is a structural-change guardrail and is included in `param_hash`; bump it when components/signals/position sizing change.  
 - **run_id format**: default is `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`, overridable via CLI `--run_id`.  
 
+## Evaluation Layer Contract / 评价层契约
+
+**中文**
+
+- **指标契约**：对比/排名层使用的核心公式与字段定义统一收敛到 `docs/KEY_METRICS.md`。  
+- **Rolling 口径**：固定 `window_days=180`、`step_days=60`，从 `equity_by_day.csv` 的首日对齐滚动；窗口切片遵循 start inclusive / end exclusive。  
+- **评分逻辑**：`final` 由 `E/UI` 与 `mdd_score` 组合，`mdd_pass` 以 `MDD > -0.30` 判定；详见 `docs/KEY_METRICS.md`。  
+
+**English**
+
+- **Metric contract**: ranking/compare formulas and fields are centralized in `docs/KEY_METRICS.md`.  
+- **Rolling semantics**: fixed `window_days=180`, `step_days=60`, aligned from the first day in `equity_by_day.csv`; windows use start-inclusive/end-exclusive slicing.  
+- **Scoring**: `final` combines `E/UI` with `mdd_score`, and `mdd_pass` uses `MDD > -0.30`; see `docs/KEY_METRICS.md` for details.  
+
 ## 数据与时间粒度 / Data & Timeframe
 策略计算使用的字段包括：close（所有路径），high/low（HLC3与Donchian路径），其它字段如open/volume/trades未在信号计算中使用。  
 Fields used in strategy calculations include: close (all paths), high/low (HLC3 and Donchian paths); other fields like open/volume/trades are not used in signal calculations.

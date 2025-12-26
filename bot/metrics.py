@@ -231,3 +231,27 @@ def total_return(equity: pd.Series) -> float:
     if equity.empty:
         return 0.0
     return float(equity.iloc[-1] / equity.iloc[0] - 1.0)
+
+
+def total_return_from_equity(equity: ArrayLike) -> float:
+    values = _to_equity_array(equity)
+    if values.size < 2:
+        return 0.0
+    return float(values[-1] / values[0] - 1.0)
+
+
+def equity_basic_metrics(equity: ArrayLike) -> Dict[str, float]:
+    values = _to_equity_array(equity)
+    if values.size == 0:
+        return {
+            "total_return": 0.0,
+            "max_drawdown": 0.0,
+            "ulcer_index": 0.0,
+        }
+    total_ret = total_return_from_equity(values)
+    mdd, ui = mdd_and_ulcer_index(values)
+    return {
+        "total_return": float(total_ret),
+        "max_drawdown": float(mdd),
+        "ulcer_index": float(ui),
+    }
