@@ -244,7 +244,7 @@ flowchart TD
 - `data/backtest_result/{run_id}/equity_by_day.csv`、`equity_by_day_bh.csv`、`trades.jsonl`、`summary.json`、`equity_by_day_with_benchmark.csv`（若含 `net_exposure`）、`quarterly_stats.csv`。证据：`bot/backtest.py:L706-L866` 与 `bot/quarterly_stats.py:L253-L325`。
 - 运行级别输出：`config_snapshot.json`、`run_record.json`、`runs.jsonl`。证据：`bot/backtest.py:L918-L980` 与 `bot/backtest_store.py:L97-L115`。
 - `quarterly_stats.csv` 主要字段包含 `pnl`、`return_annualized`、`sharpe_annualized` 等（`return_annualized` 为季度内首尾 equity 复利年化）。证据：`bot/quarterly_stats.py:L151-L223, L279-L325`。
-- 排名输出：`data/backtest_rank/{rank_id}/rank_results.json` 与 `rank_results.md`（可选 `rank_spec.json` 复制）。证据：`bot/rank_runs.py:L589-L714`。
+- 排名输出：`data/backtest_rank/{rank_id}/rank_results.json` 与 `rank_results.csv`（可选 `rank_spec.json` 复制）。证据：`bot/rank_runs.py:L589-L706`。
 
 ## 可复现性检查
 
@@ -269,7 +269,7 @@ flowchart TD
 - `data/backtest_result/{run_id}/equity_by_day.csv`, `equity_by_day_bh.csv`, `trades.jsonl`, `summary.json`, `equity_by_day_with_benchmark.csv` (if `net_exposure`), `quarterly_stats.csv`. Evidence: `bot/backtest.py:L639-L721`, `bot/quarterly_stats.py:L253-L325`.
 - Run-level outputs: `config_snapshot.json`, `run_record.json`, `runs.jsonl`. Evidence: `bot/backtest.py:L918-L980`.
 - `quarterly_stats.csv` key fields include `pnl`, `return_annualized`, `sharpe_annualized` (with `return_annualized` as the compound annualized return over the quarter span). Evidence: `bot/quarterly_stats.py:L151-L223, L279-L325`.
-- Ranking outputs: `data/backtest_rank/{rank_id}/rank_results.json` and `rank_results.md` (optional `rank_spec.json` copy). Evidence: `bot/rank_runs.py:L589-L714`.
+- Ranking outputs: `data/backtest_rank/{rank_id}/rank_results.json` and `rank_results.csv` (optional `rank_spec.json` copy). Evidence: `bot/rank_runs.py:L589-L706`.
 
 ## Reproducibility audit
 
