@@ -1,5 +1,11 @@
 # Documentation Versions
 
+## v4 - rank run implement
+- Added `bot/rank_runs.py` for ranking backtest runs, plus key metric contract documentation.
+- Documented ranking outputs and evaluation-layer contract updates.
+- Switched rank output from Markdown to CSV (`rank_results.csv`) for easier table analysis.
+- Prefixed rank output directories with UTC timestamps to improve readability and sorting.
+
 ## v3 - Quarterly stats annualized return column
 
 **CR (prompt focus)**
