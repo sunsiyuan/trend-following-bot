@@ -3,3 +3,4 @@
 ## Unreleased
 - Added `bot/rank_runs.py` for ranking backtest runs, plus key metric contract documentation.
 - Documented ranking outputs and evaluation-layer contract updates.
+- Prefixed rank output directories with UTC timestamps to improve readability and sorting.
