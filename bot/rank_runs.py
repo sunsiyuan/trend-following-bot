@@ -4,7 +4,7 @@ import argparse
 import json
 import math
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -73,6 +73,10 @@ def _read_runs_jsonl(path: Path) -> List[RunRecord]:
 def _canonical_hash(payload: Dict[str, Any]) -> str:
     raw = stable_json(payload).encode("utf-8")
     return sha256(raw).hexdigest()
+
+
+def _utc_now_compact() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _split_csv_arg(value: str) -> List[str]:
@@ -614,7 +618,9 @@ def main() -> None:
     filters = _collect_filters(args, spec)
     rank_id = _canonical_hash(filters)
     output_root = Path(args.output_root)
-    output_dir = output_root / rank_id
+    created_at_utc = _utc_now_compact()
+    rank_dir_name = f"{created_at_utc}__{rank_id}"
+    output_dir = output_root / rank_dir_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if spec is not None:
@@ -697,6 +703,8 @@ def main() -> None:
     ranked = _rank_runs(results)
     rank_output = {
         "rank_id": rank_id,
+        "rank_dir_name": rank_dir_name,
+        "created_at_utc": created_at_utc,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "filters": filters,
         "run_count": len(ranked),
