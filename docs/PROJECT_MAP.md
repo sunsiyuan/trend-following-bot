@@ -58,7 +58,7 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 - **实际 CLI 入口**：`bot/backtest.py` 内的 `main()` 使用 `argparse` 定义 `--start/--end/--symbols/--run_id` 并在 `__main__` 下执行，因此实际运行入口为模块 `bot.backtest`（如 `python -m bot.backtest ...`）。证据：`main()` 与 `if __name__ == "__main__":`（`bot/backtest.py:L918-L967`）。
 - **可调用核心入口**：`run_backtest(symbols, start, end, params, run_id=None)` 是可 import 的回测入口，返回 run 级别结果并追加 runs.jsonl。证据：`bot/backtest.py:L388-L536`。
-- **主流程**：`main()` 解析参数 → 组装 `BacktestParams` → 调用 `run_backtest` → 写入 `config_snapshot.json` → 聚合 `summary_all.json`。证据：`bot/backtest.py:L918-L965`。
+- **主流程**：`main()` 解析参数 → 组装 `BacktestParams` → 调用 `run_backtest`；当传入多个 symbols 时，每个 symbol 会生成独立的 run_id/run_dir 并各自写入 `config_snapshot.json` 与 `summary_all.json`。证据：`bot/backtest.py:L918-L980`。
 - **数据读取**：`run_backtest_for_symbol` 调用 `data_client.ensure_market_data` 拉取/加载趋势与执行时间框架数据（含缓存下载）。证据：`bot/backtest.py:L345-L365` 与 `bot/data_client.py:L308-L394`。
 - **策略/信号计算**：特征计算通过 `strategy.prepare_features_1d` 与 `strategy.prepare_features_exec`，决策通过 `strategy.decide`。证据：`bot/backtest.py:L369-L507`、`bot/strategy.py:L102-L228, L353-L582`。
 - **模拟执行/撮合**：回测内用 cash + position 模型更新仓位与费用，按执行 bar 迭代。证据：仓位/费用更新与 trade 记录写入（`bot/backtest.py:L488-L605`）。
@@ -69,7 +69,7 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 - **CLI entry**: `bot/backtest.py` defines `main()` with `argparse` arguments (`--start/--end/--symbols/--run_id`) and runs it under `__main__`, so the runnable entry is module `bot.backtest` (e.g., `python -m bot.backtest ...`). Evidence: `main()` + `if __name__ == "__main__"` (`bot/backtest.py:L918-L967`).
 - **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is the importable backtest entrypoint and appends runs.jsonl. Evidence: `bot/backtest.py:L388-L536`.
-- **Main flow**: `main()` parses args → builds `BacktestParams` → calls `run_backtest` → writes `config_snapshot.json` → writes `summary_all.json`. Evidence: `bot/backtest.py:L918-L965`.
+- **Main flow**: `main()` parses args → builds `BacktestParams` → calls `run_backtest`; when multiple symbols are provided, each symbol produces its own run_id/run_dir and its own `config_snapshot.json` and `summary_all.json`. Evidence: `bot/backtest.py:L918-L980`.
 - **Data read**: `run_backtest_for_symbol` calls `data_client.ensure_market_data` for trend/execution timeframes (cache + download). Evidence: `bot/backtest.py:L345-L365` and `bot/data_client.py:L308-L394`.
 - **Strategy/signal**: features via `strategy.prepare_features_1d` & `strategy.prepare_features_exec`, decisions via `strategy.decide`. Evidence: `bot/backtest.py:L369-L507`, `bot/strategy.py:L102-L228, L353-L582`.
 - **Execution simulation**: cash + position model updated per execution bar, including fees and trade records. Evidence: `bot/backtest.py:L488-L605`.
