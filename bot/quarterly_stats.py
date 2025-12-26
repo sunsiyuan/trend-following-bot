@@ -128,6 +128,20 @@ def _mean(values: List[float]) -> float:
     return sum(values) / len(values)
 
 
+def annualized_return_from_equity(start_equity: float, end_equity: float, days: int) -> float:
+    if days <= 0 or start_equity <= 0:
+        return math.nan
+    if math.isnan(start_equity) or math.isnan(end_equity):
+        return math.nan
+    return (end_equity / start_equity) ** (365.0 / days) - 1.0
+
+
+def _equity_span_days(rows: List[EquityRow]) -> int:
+    if not rows:
+        return 0
+    return (rows[-1].date - rows[0].date).days
+
+
 def _compute_trade_metrics(trades_path: Path) -> Optional[dict]:
     if not trades_path.exists():
         return None
@@ -178,7 +192,7 @@ def _build_row(
     use_trades: bool,
 ) -> dict:
     equity = [row.equity for row in rows]
-    days = len(equity)
+    days = _equity_span_days(rows)
     start_equity = equity[0] if equity else math.nan
     end_equity = equity[-1] if equity else math.nan
     pnl = math.nan
@@ -190,7 +204,7 @@ def _build_row(
     sharpe = metrics.sharpe_annualized_from_returns(returns)
 
     mdd, ui = metrics.mdd_and_ulcer_index(equity)
-    annualized_return = metrics.annualized_return(start_equity, end_equity, days)
+    annualized_return = annualized_return_from_equity(start_equity, end_equity, days)
     upi = math.nan
     if ui and not math.isnan(ui) and ui != 0:
         upi = annualized_return / ui
@@ -231,6 +245,7 @@ def _build_row(
         "period": period,
         "strategy": strategy,
         "pnl": pnl,
+        "return_annualized": annualized_return,
         "sharpe_annualized": sharpe,
         "upi_annualized": upi,
         "mdd": mdd,
@@ -296,6 +311,7 @@ def generate_quarterly_stats(
         "period",
         "strategy",
         "pnl",
+        "return_annualized",
         "sharpe_annualized",
         "upi_annualized",
         "mdd",

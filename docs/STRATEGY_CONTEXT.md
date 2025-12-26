@@ -282,6 +282,8 @@ Quarterly stats use equity_returns_with_first_zero and sharpe_annualized_from_re
 
 - 公式：returns[0]=0；returns[t]=equity[t]/equity[t-1]-1  
 - Formula: returns[0]=0; returns[t]=equity[t]/equity[t-1]-1
+- 公式：return_annualized = (E1/E0) ** (365/days) - 1（days 为季度内首尾日期自然日差，E0<=0 或 days<=0 返回 NaN）  
+- Formula: return_annualized = (E1/E0) ** (365/days) - 1 (days is the natural day span between first/last equity dates; NaN when E0<=0 or days<=0)
 - 公式：turnover_proxy = sum_{t=1..T} abs(net_exposure_t - net_exposure_{t-1})  
 - Formula: turnover_proxy = sum_{t=1..T} abs(net_exposure_t - net_exposure_{t-1})
 - 代码位置：bot/quarterly_stats.py::_build_row（关键变量：returns, turnover_proxy, net_exposure）  
