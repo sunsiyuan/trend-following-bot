@@ -1,5 +1,14 @@
 # Documentation Versions
 
+## v3 - Quarterly stats annualized return column
+
+**CR (prompt focus)**
+- Add `return_annualized` to `quarterly_stats.csv` with compound annualization based on the quarter’s start/end equity dates.
+
+**Summary of changes**
+- Updated `bot/quarterly_stats.py` to compute `return_annualized` and place it between `pnl` and `sharpe_annualized`.
+- Documented the new quarterly stats metric in `docs/PROJECT_MAP.md` and `docs/STRATEGY_CONTEXT.md`.
+
 ## v2 - Backtest experiment contract
 
 **CR (prompt focus)**
