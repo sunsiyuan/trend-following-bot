@@ -907,12 +907,10 @@ def run_backtest_for_symbol(
     )
 
     # Write outputs
-    sym_dir = run_dir / symbol
-    sym_dir.mkdir(parents=True, exist_ok=True)
-
-    equity_by_day_path = sym_dir / "equity_by_day.csv"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    equity_by_day_path = run_dir / "equity_by_day.csv"
     df_day.to_csv(equity_by_day_path, index=False)
-    equity_by_day_bh_path = sym_dir / "equity_by_day_bh.csv"
+    equity_by_day_bh_path = run_dir / "equity_by_day_bh.csv"
     pd.DataFrame({
         "date_utc": dates,
         "close_px": close_px.values,
@@ -924,10 +922,10 @@ def run_backtest_for_symbol(
             "strategy_equity": equity_series.values,
             "bh_equity": bh_equity.values,
             "net_exposure": df_day["net_exposure"].values,
-        }).to_csv(sym_dir / "equity_by_day_with_benchmark.csv", index=False)
+        }).to_csv(run_dir / "equity_by_day_with_benchmark.csv", index=False)
 
     # overwrite trades file for determinism
-    trades_path = sym_dir / "trades.jsonl"
+    trades_path = run_dir / "trades.jsonl"
     if trades_path.exists():
         trades_path.unlink()
     append_jsonl(trades_path, trades)
@@ -975,7 +973,7 @@ def run_backtest_for_symbol(
     if diagnostic_warnings:
         summary["diagnostics_warning"] = "; ".join(diagnostic_warnings)
 
-    write_json(sym_dir / "summary.json", summary)
+    write_json(run_dir / "summary.json", summary)
 
     strategy_label = (
         summary.get("layers", {}).get("direction_mode")
@@ -986,7 +984,7 @@ def run_backtest_for_symbol(
         equity_by_day_path=equity_by_day_path,
         equity_by_day_bh_path=equity_by_day_bh_path,
         trades_path=trades_path,
-        output_path=sym_dir / "quarterly_stats.csv",
+        output_path=run_dir / "quarterly_stats.csv",
         strategy_label=strategy_label,
     )
 
@@ -1042,15 +1040,6 @@ def main() -> None:
             "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
             "TAKER_FEE_BPS": config.TAKER_FEE_BPS,
             "HL_INFO_URL": config.HL_INFO_URL,
-        })
-
-        # Aggregate summary
-        write_json(run_dir / "summary_all.json", {
-            "run_id": run_id,
-            "start_date_utc": args.start,
-            "end_date_utc": args.end,
-            "symbols": run_symbols,
-            "per_symbol": result["per_symbol"],
         })
 
         log.info("Done. Results in %s", run_dir.as_posix())

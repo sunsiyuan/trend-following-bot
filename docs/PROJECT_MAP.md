@@ -235,8 +235,8 @@ flowchart TD
 
 ## 结果输出位置
 
-- `data/backtest_result/{run_id}/{symbol}/equity_by_day.csv`、`equity_by_day_bh.csv`、`trades.jsonl`、`summary.json`、`equity_by_day_with_benchmark.csv`（若含 `net_exposure`）、`quarterly_stats.csv`。证据：`bot/backtest.py:L706-L866` 与 `bot/quarterly_stats.py:L253-L325`。
-- 运行级别输出：`config_snapshot.json`、`summary_all.json`、`runs.jsonl`。证据：`bot/backtest.py:L918-L965` 与 `bot/backtest_store.py:L97-L115`。
+- `data/backtest_result/{run_id}/equity_by_day.csv`、`equity_by_day_bh.csv`、`trades.jsonl`、`summary.json`、`equity_by_day_with_benchmark.csv`（若含 `net_exposure`）、`quarterly_stats.csv`。证据：`bot/backtest.py:L706-L866` 与 `bot/quarterly_stats.py:L253-L325`。
+- 运行级别输出：`config_snapshot.json`、`run_record.json`、`runs.jsonl`。证据：`bot/backtest.py:L918-L980` 与 `bot/backtest_store.py:L97-L115`。
 
 ## 可复现性检查
 
@@ -258,8 +258,8 @@ flowchart TD
 
 ## Output locations
 
-- `data/backtest_result/{run_id}/{symbol}/equity_by_day.csv`, `equity_by_day_bh.csv`, `trades.jsonl`, `summary.json`, `equity_by_day_with_benchmark.csv` (if `net_exposure`), `quarterly_stats.csv`. Evidence: `bot/backtest.py:L639-L721`, `bot/quarterly_stats.py:L253-L325`.
-- Run-level outputs: `config_snapshot.json`, `summary_all.json`. Evidence: `bot/backtest.py:L741-L770`.
+- `data/backtest_result/{run_id}/equity_by_day.csv`, `equity_by_day_bh.csv`, `trades.jsonl`, `summary.json`, `equity_by_day_with_benchmark.csv` (if `net_exposure`), `quarterly_stats.csv`. Evidence: `bot/backtest.py:L639-L721`, `bot/quarterly_stats.py:L253-L325`.
+- Run-level outputs: `config_snapshot.json`, `run_record.json`, `runs.jsonl`. Evidence: `bot/backtest.py:L918-L980`.
 
 ## Reproducibility audit
 
