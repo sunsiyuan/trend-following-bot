@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Dict
 
+from bot import strategy as strat
 
 def _normalize_for_json(obj: Any) -> Any:
     if dataclasses.is_dataclass(obj):
@@ -48,6 +49,7 @@ class BacktestParams:
     def to_hashable_dict(self) -> Dict[str, Any]:
         return {
             "schema_version": self.schema_version,
+            "strategy_version": strat.STRATEGY_VERSION,
             "timeframes": self.timeframes,
             "trend_existence": self.trend_existence,
             "trend_quality": self.trend_quality,

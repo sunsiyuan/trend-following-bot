@@ -242,6 +242,7 @@ flowchart TD
 
 - **run_id 默认确定性**：`run_backtest` 使用 `param_hash` 与 `data_fingerprint` 组装默认 `run_id`（`{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`）。证据：`bot/backtest.py:L402-L477`。
 - **参数哈希与数据指纹**：`BacktestParams.to_hashable_dict` + `calc_param_hash` 生成 `param_hash`，`backtest_store.build_data_manifest`/`calc_data_fingerprint` 生成 `data_fingerprint` 并写入 runs.jsonl。证据：`bot/backtest_params.py:L1-L63`、`bot/backtest_store.py:L70-L115`、`bot/backtest.py:L402-L533`。
+- **strategy_version 来源**：`bot/strategy.py::STRATEGY_VERSION`，进入 `BacktestParams.to_hashable_dict` 从而影响 `param_hash` 与默认 `run_id`，并落盘到 `run_record.json`/`runs.jsonl`。证据：`bot/strategy.py:L27-L30`、`bot/backtest_params.py:L29-L56`、`bot/backtest.py:L502-L560`。
 - **数据读取仍依赖实时网络**：`data_client` 通过 `requests.post` 调用 Hyperliquid API；若缓存不足将下载。证据：`bot/data_client.py:L156-L215, L380-L392`。
 - **当前时间仍用于数据抓取的闭合K线过滤**：`fetch_candle_snapshot` 使用 `now_ms()` 过滤未收盘K线，但回测切片不再使用 `now()`。证据：`bot/data_client.py:L211-L229` 与 `bot/backtest_store.py:L28-L64`。
 - **确定性写入**：交易文件输出前会先删除旧文件（保证文件内容与顺序由当前回测结果决定）。证据：`bot/backtest.py:L733-L739`。
@@ -287,4 +288,5 @@ flowchart TD
 
 - **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is now implemented and invoked by CLI; params are centralized in `BacktestParams`. Evidence: `bot/backtest.py:L388-L536`, `bot/backtest_params.py:L1-L63`.
 - **Repro metadata**: `backtest_store.build_data_manifest` builds manifests, `calc_data_fingerprint` fingerprints them, and `runs.jsonl` is appended. Evidence: `bot/backtest_store.py:L70-L115`, `bot/backtest.py:L402-L533`.
+- **strategy_version source**: `bot/strategy.py::STRATEGY_VERSION` is included in `BacktestParams.to_hashable_dict`, affecting `param_hash` and the default `run_id`, and is persisted to `run_record.json`/`runs.jsonl`. Evidence: `bot/strategy.py:L27-L30`, `bot/backtest_params.py:L29-L56`, `bot/backtest.py:L502-L560`.
 - **Output placement preserved**: `run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id` with existing per-symbol output paths unchanged. Evidence: `bot/backtest.py:L481-L866`.

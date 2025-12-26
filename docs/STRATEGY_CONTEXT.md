@@ -21,6 +21,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **时间边界语义**：回测裁剪固定为 start inclusive、end exclusive（使用 `backtest_store.slice_bars` 基于 `open_ts`/`close_ts` 裁剪）。回测侧不允许 `now()` 裁剪。  
 - **data_fingerprint（低配 manifest）**：每个 timeframe 生成 manifest，字段固定为 `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`，并通过 `stable_json` + `sha256` 生成 `data_fingerprint`。  
 - **param_hash**：`BacktestParams.to_hashable_dict` 只包含影响结果的参数；`stable_json` 后 sha256 得到 `param_hash`。  
+- **strategy_version**：`bot/strategy.py` 定义 `STRATEGY_VERSION` 作为结构性变更护栏，并进入 `param_hash`；任何结构件增删、信号定义变更、仓位函数变更都必须 bump。  
 - **run_id 格式**：默认 `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`，CLI 可用 `--run_id` 覆盖。  
 
 **English**
@@ -28,6 +29,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **Time boundary semantics**: slicing is start-inclusive, end-exclusive via `backtest_store.slice_bars` using `open_ts`/`close_ts`. No `now()` trimming in backtest slicing.  
 - **data_fingerprint (minimal manifest)**: each timeframe emits a manifest with fields `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`, hashed via `stable_json` + `sha256`.  
 - **param_hash**: `BacktestParams.to_hashable_dict` includes only result-affecting params; `stable_json` + sha256 yields `param_hash`.  
+- **strategy_version**: `STRATEGY_VERSION` in `bot/strategy.py` is a structural-change guardrail and is included in `param_hash`; bump it when components/signals/position sizing change.  
 - **run_id format**: default is `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`, overridable via CLI `--run_id`.  
 
 ## 数据与时间粒度 / Data & Timeframe
