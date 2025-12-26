@@ -26,6 +26,10 @@ import pandas as pd
 from bot import config
 from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
+STRATEGY_VERSION = "v1"
+# NOTE: Any structural strategy change (components added/removed, signal definitions,
+# or position-sizing logic changes) must bump STRATEGY_VERSION.
+
 TrendDir = Literal["LONG", "SHORT"]
 MarketState = Literal["LONG", "SHORT"]
 DirectionMode = config.DirectionMode

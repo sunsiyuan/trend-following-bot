@@ -18,8 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
-from dataclasses import asdict
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -29,6 +28,8 @@ import pandas as pd
 from bot import config
 from bot import data_client
 from bot import metrics
+from bot import backtest_store
+from bot.backtest_params import BacktestParams, calc_param_hash
 from bot.quarterly_stats import generate_quarterly_stats
 from bot import strategy as strat
 
@@ -49,8 +50,24 @@ def parse_date_to_ms(s: str) -> int:
 def ms_to_ymd(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
 
-def utc_now_compact() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+def normalize_date_range(start: str | int, end: str | int) -> Tuple[int, int, str, str]:
+    if isinstance(start, str):
+        start_ms = parse_date_to_ms(start)
+        start_label = start
+    else:
+        start_ms = int(start)
+        start_label = ms_to_ymd(start_ms)
+
+    if isinstance(end, str):
+        end_ms = parse_date_to_ms(end) + 24 * 60 * 60 * 1000
+        end_label = end
+    else:
+        end_ms = int(end)
+        end_label = ms_to_ymd(end_ms - 1)
+
+    if end_ms <= start_ms:
+        raise ValueError("end must be greater than start")
+    return start_ms, end_ms, start_label, end_label
 
 def write_json(path: Path, obj: Dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -342,27 +359,280 @@ def update_avg_and_realized(q0: float, avg0: float, dq: float, price: float) -> 
     # new position opened in opposite direction at this price
     return price, realized_close
 
+def build_params_from_config() -> BacktestParams:
+    return BacktestParams(
+        timeframes=dict(config.TIMEFRAMES),
+        trend_existence=dict(config.TREND_EXISTENCE),
+        trend_quality=dict(config.TREND_QUALITY),
+        execution=dict(config.EXECUTION),
+        direction_mode=config.DIRECTION_MODE,
+        starting_cash_usdc_per_symbol=float(config.STARTING_CASH_USDC_PER_SYMBOL),
+        taker_fee_bps=float(config.TAKER_FEE_BPS),
+    )
+
+
+def compute_default_run_id(
+    symbol_label: str,
+    start_label: str,
+    end_label: str,
+    param_hash: str,
+    data_fingerprint: str,
+) -> str:
+    return (
+        f"{symbol_label}__{start_label}__{end_label}__"
+        f"{param_hash[:8]}__{data_fingerprint[:8]}"
+    )
+
+
+def run_backtest(
+    symbol: str | List[str],
+    start: str | int,
+    end: str | int,
+    params: BacktestParams | Dict,
+    run_id: str | None = None,
+    runs_jsonl_path: Path | None = None,
+    overwrite: bool = False,
+) -> Dict:
+    """
+    Callable backtest entrypoint for reproducible runs.
+    start/end use start-inclusive, end-exclusive semantics.
+    """
+    symbols = [symbol] if isinstance(symbol, str) else list(symbol)
+    if not symbols:
+        raise ValueError("symbol is required")
+    if len(symbols) > 1:
+        if run_id:
+            raise ValueError("run_id must be None when running multiple symbols")
+        runs = [
+            run_backtest(
+                sym,
+                start,
+                end,
+                params,
+                run_id=None,
+                runs_jsonl_path=runs_jsonl_path,
+                overwrite=overwrite,
+            )
+            for sym in symbols
+        ]
+        return {"runs": runs, "status": "multi"}
+
+    start_ms, end_ms, start_label, end_label = normalize_date_range(start, end)
+
+    params_obj = params if isinstance(params, BacktestParams) else BacktestParams.from_dict(params)
+    params_hashable = params_obj.to_hashable_dict()
+    param_hash = calc_param_hash(params_hashable)
+
+    per_symbol_summaries: List[Dict] = []
+    per_symbol_manifests: Dict[str, List[Dict]] = {}
+    data_by_symbol: Dict[str, Tuple[pd.DataFrame, pd.DataFrame]] = {}
+
+    end_fetch_ms = end_ms - 1
+    ms_trend = data_client.interval_to_ms(params_obj.timeframes["trend"])
+    ms_exec = data_client.interval_to_ms(params_obj.timeframes["execution"])
+    warmup_1d = max(params_obj.trend_existence["window"], params_obj.trend_quality["window"]) + 10
+    warmup_exec_steps = max(
+        params_obj.execution["build_min_step_bars"],
+        params_obj.execution["reduce_min_step_bars"],
+    )
+    warmup_exec = params_obj.execution["window"] + warmup_exec_steps + 10
+
+    sym = symbols[0]
+    log.info("Backtesting %s from %s to %s ...", sym, start_label, end_label)
+    fetch_start = min(start_ms - warmup_1d * ms_trend, start_ms - warmup_exec * ms_exec)
+    fetch_start = max(0, fetch_start)
+
+    df_trend = data_client.ensure_market_data(
+        sym,
+        params_obj.timeframes["trend"],
+        fetch_start,
+        end_fetch_ms,
+    )
+    df_exec = data_client.ensure_market_data(
+        sym,
+        params_obj.timeframes["execution"],
+        fetch_start,
+        end_fetch_ms,
+    )
+
+    sliced_trend = backtest_store.slice_bars(df_trend, start_ms, end_ms)
+    sliced_exec = backtest_store.slice_bars(df_exec, start_ms, end_ms)
+
+    manifest_trend = backtest_store.build_data_manifest(
+        params_obj.timeframes["trend"],
+        start_ms,
+        end_ms,
+        sliced_trend,
+    )
+    manifest_exec = backtest_store.build_data_manifest(
+        params_obj.timeframes["execution"],
+        start_ms,
+        end_ms,
+        sliced_exec,
+    )
+
+    per_symbol_manifests[sym] = [manifest_trend, manifest_exec]
+    data_by_symbol[sym] = (df_trend, df_exec)
+
+    manifest_flat: List[Dict] = []
+    for sym in sorted(per_symbol_manifests.keys()):
+        manifest_flat.extend(per_symbol_manifests[sym])
+    manifest_flat = sorted(
+        manifest_flat,
+        key=lambda item: (
+            item.get("tf"),
+            item.get("requested_start_ts"),
+            item.get("requested_end_ts"),
+            item.get("actual_first_ts") or -1,
+            item.get("actual_last_ts") or -1,
+            item.get("row_count"),
+            item.get("expected_row_count"),
+        ),
+    )
+    data_fingerprint = backtest_store.calc_data_fingerprint(manifest_flat)
+
+    symbol_label = symbols[0]
+    resolved_run_id = run_id or compute_default_run_id(
+        symbol_label,
+        start_label,
+        end_label,
+        param_hash,
+        data_fingerprint,
+    )
+    run_dir = Path(config.BACKTEST_RESULT_DIR) / resolved_run_id
+    run_record_path = run_dir / "run_record.json"
+    if run_dir.exists():
+        if overwrite:
+            shutil.rmtree(run_dir)
+        else:
+            if run_record_path.exists():
+                existing_record = json.loads(run_record_path.read_text(encoding="utf-8"))
+                existing_param_hash = existing_record.get("param_hash")
+                existing_data_fingerprint = existing_record.get("data_fingerprint")
+                if existing_param_hash == param_hash and existing_data_fingerprint == data_fingerprint:
+                    log.info("Run %s exists, skipped.", resolved_run_id)
+                    return {
+                        "run_id": resolved_run_id,
+                        "start": start_label,
+                        "end": end_label,
+                        "symbols": symbols,
+                        "param_hash": param_hash,
+                        "data_fingerprint": data_fingerprint,
+                        "data_manifest_by_symbol": per_symbol_manifests,
+                        "per_symbol": [],
+                        "status": "skipped",
+                    }
+                raise RuntimeError(
+                    "Run ID conflict: existing run_record.json has "
+                    f"param_hash={existing_param_hash}, data_fingerprint={existing_data_fingerprint} "
+                    f"but requested param_hash={param_hash}, data_fingerprint={data_fingerprint}."
+                )
+            raise RuntimeError(
+                f"Run directory {run_dir} already exists without run_record.json. "
+                "Use overwrite to rerun."
+            )
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    df_trend, df_exec = data_by_symbol[sym]
+    summary = run_backtest_for_symbol(
+        sym,
+        start_ms,
+        end_ms,
+        run_dir,
+        params_obj,
+        df_trend,
+        df_exec,
+    )
+    per_symbol_summaries.append(summary)
+
+    if runs_jsonl_path is None:
+        runs_jsonl_path = Path(config.BACKTEST_RESULT_DIR) / "runs.jsonl"
+
+    record = {
+        "run_id": resolved_run_id,
+        "symbol_label": symbol_label,
+        "symbols": symbols,
+        "start": start_label,
+        "end": end_label,
+        "param_hash": param_hash,
+        "data_fingerprint": data_fingerprint,
+        "param_schema_version": params_obj.schema_version,
+        "data_schema_version": backtest_store.data_schema_version,
+        "strategy_version": params_hashable.get("strategy_version"),
+        "params_hashable": params_hashable,
+        "data_manifest_by_symbol": per_symbol_manifests,
+        "data_manifest_by_tf": manifest_flat,
+        "metrics": per_symbol_summaries,
+    }
+    write_json(run_record_path, {
+        "run_id": resolved_run_id,
+        "param_hash": param_hash,
+        "data_fingerprint": data_fingerprint,
+        "param_schema_version": params_obj.schema_version,
+        "data_schema_version": backtest_store.data_schema_version,
+        "strategy_version": params_hashable.get("strategy_version"),
+        "params_hashable": params_hashable,
+        "data_manifest_by_tf": manifest_flat,
+        "data_manifest_by_symbol": per_symbol_manifests,
+    })
+
+    existing_runs = backtest_store.read_jsonl(runs_jsonl_path)
+    existing_same = [
+        r for r in existing_runs
+        if r.get("run_id") == resolved_run_id
+    ]
+    if existing_same:
+        fingerprints_match = all(
+            r.get("param_hash") == param_hash and r.get("data_fingerprint") == data_fingerprint
+            for r in existing_same
+        )
+        if not fingerprints_match:
+            if not overwrite:
+                raise RuntimeError(
+                    "runs.jsonl conflict: existing run_id has mismatched fingerprints."
+                )
+            existing_runs = [r for r in existing_runs if r.get("run_id") != resolved_run_id]
+        else:
+            log.info("runs.jsonl already contains run_id %s, skipping append.", resolved_run_id)
+            return {
+                "run_id": resolved_run_id,
+                "start": start_label,
+                "end": end_label,
+                "symbols": symbols,
+                "param_hash": param_hash,
+                "data_fingerprint": data_fingerprint,
+                "data_manifest_by_symbol": per_symbol_manifests,
+                "per_symbol": per_symbol_summaries,
+                "status": "completed",
+            }
+
+    backtest_store.write_jsonl(runs_jsonl_path, [*existing_runs, record])
+
+    return {
+        "run_id": resolved_run_id,
+        "start": start_label,
+        "end": end_label,
+        "symbols": symbols,
+        "param_hash": param_hash,
+        "data_fingerprint": data_fingerprint,
+        "data_manifest_by_symbol": per_symbol_manifests,
+        "per_symbol": per_symbol_summaries,
+        "status": "completed",
+    }
+
+
 def run_backtest_for_symbol(
     symbol: str,
     start_ms: int,
     end_ms: int,
     run_dir: Path,
+    params: BacktestParams,
+    df_1d: pd.DataFrame,
+    df_ex: pd.DataFrame,
 ) -> Dict:
     """
     One-symbol backtest (simple and debuggable). Multi-symbol aggregation is handled by caller.
     """
-    # Warmup: fetch extra history for indicator windows + execution cooldown.
-    ms_1d = data_client.interval_to_ms(config.TIMEFRAMES["trend"])
-    ms_ex = data_client.interval_to_ms(config.TIMEFRAMES["execution"])
-    warmup_1d = max(config.TREND_EXISTENCE["window"], config.TREND_QUALITY["window"]) + 10
-    warmup_exec_steps = max(config.EXECUTION["build_min_step_bars"], config.EXECUTION["reduce_min_step_bars"])
-    warmup_ex = config.EXECUTION["window"] + warmup_exec_steps + 10
-    fetch_start = min(start_ms - warmup_1d * ms_1d, start_ms - warmup_ex * ms_ex)
-    fetch_start = max(0, fetch_start)
-
-    df_1d = data_client.ensure_market_data(symbol, config.TIMEFRAMES["trend"], fetch_start, end_ms)
-    df_ex = data_client.ensure_market_data(symbol, config.TIMEFRAMES["execution"], fetch_start, end_ms)
-
     if df_1d.empty or df_ex.empty:
         raise RuntimeError(f"Insufficient market data for {symbol}")
 
@@ -370,13 +640,13 @@ def run_backtest_for_symbol(
     df_ex_feat = strat.prepare_features_exec(df_ex)
 
     # Backtest state
-    cash = float(config.STARTING_CASH_USDC_PER_SYMBOL)
+    cash = float(params.starting_cash_usdc_per_symbol)
     qty = 0.0
     avg_entry = 0.0
     realized_pnl_cum = 0.0
     state = strat.StrategyState()
 
-    fee_rate = config.fee_rate_from_bps(config.TAKER_FEE_BPS)
+    fee_rate = config.fee_rate_from_bps(params.taker_fee_bps)
 
     trades: List[Dict] = []
     last_day: str = ""
@@ -486,7 +756,7 @@ def run_backtest_for_symbol(
         }
 
     # Iterate execution bars inside evaluation window
-    ex_items = list(df_ex_feat.loc[(df_ex_feat.index >= start_ms) & (df_ex_feat.index <= end_ms)].iterrows())
+    ex_items = list(df_ex_feat.loc[(df_ex_feat.index >= start_ms) & (df_ex_feat.index < end_ms)].iterrows())
     for bar_idx, (ts, row_ex) in enumerate(ex_items):
         price = float(row_ex["close"])
 
@@ -529,7 +799,7 @@ def run_backtest_for_symbol(
                 "ts_utc": ts_utc,
                 "date_utc": ms_to_ymd(int(ts)),
                 "symbol": symbol,
-                "bar_interval": config.TIMEFRAMES["execution"],
+                "bar_interval": params.timeframes["execution"],
                 "action": "HOLD",
                 "close_px": price,
                 "current_pos_frac": float(current_pos_frac),
@@ -584,7 +854,7 @@ def run_backtest_for_symbol(
             "ts_utc": ts_utc,
             "date_utc": ms_to_ymd(int(ts)),
             "symbol": symbol,
-            "bar_interval": config.TIMEFRAMES["execution"],
+            "bar_interval": params.timeframes["execution"],
             "action": decision.get("action", "REBALANCE"),
             "close_px": price,
             "current_pos_frac": float(current_pos_frac),
@@ -618,7 +888,7 @@ def run_backtest_for_symbol(
     equity_series = df_day["equity_usdc"]
     strategy_metrics = metrics.compute_equity_metrics(
         equity_series,
-        starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
+        starting_cash=float(params.starting_cash_usdc_per_symbol),
     )
     dates = pd.Index(df_day["date_utc"], name="date_utc")
     close_px = pd.Series(df_day["close_px"].to_numpy(), index=dates, name="close_px")
@@ -629,20 +899,18 @@ def run_backtest_for_symbol(
     bh_equity = metrics.build_buy_hold_curve(
         dates=dates,
         close_px=close_px,
-        starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
+        starting_cash=float(params.starting_cash_usdc_per_symbol),
     )
     bh_metrics = metrics.compute_equity_metrics(
         bh_equity,
-        starting_cash=float(config.STARTING_CASH_USDC_PER_SYMBOL),
+        starting_cash=float(params.starting_cash_usdc_per_symbol),
     )
 
     # Write outputs
-    sym_dir = run_dir / symbol
-    sym_dir.mkdir(parents=True, exist_ok=True)
-
-    equity_by_day_path = sym_dir / "equity_by_day.csv"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    equity_by_day_path = run_dir / "equity_by_day.csv"
     df_day.to_csv(equity_by_day_path, index=False)
-    equity_by_day_bh_path = sym_dir / "equity_by_day_bh.csv"
+    equity_by_day_bh_path = run_dir / "equity_by_day_bh.csv"
     pd.DataFrame({
         "date_utc": dates,
         "close_px": close_px.values,
@@ -654,10 +922,10 @@ def run_backtest_for_symbol(
             "strategy_equity": equity_series.values,
             "bh_equity": bh_equity.values,
             "net_exposure": df_day["net_exposure"].values,
-        }).to_csv(sym_dir / "equity_by_day_with_benchmark.csv", index=False)
+        }).to_csv(run_dir / "equity_by_day_with_benchmark.csv", index=False)
 
     # overwrite trades file for determinism
-    trades_path = sym_dir / "trades.jsonl"
+    trades_path = run_dir / "trades.jsonl"
     if trades_path.exists():
         trades_path.unlink()
     append_jsonl(trades_path, trades)
@@ -667,20 +935,20 @@ def run_backtest_for_symbol(
     diagnostic_counts, diagnostic_warnings = compute_diagnostic_counts(
         trades_path,
         equity_by_day_path,
-        config.DIRECTION_MODE,
+        params.direction_mode,
     )
     summary = {
         "symbol": symbol,
         "start_date_utc": ms_to_ymd(start_ms),
-        "end_date_utc": ms_to_ymd(end_ms),
-        "starting_cash_usdc": float(config.STARTING_CASH_USDC_PER_SYMBOL),
+        "end_date_utc": ms_to_ymd(end_ms - 1),
+        "starting_cash_usdc": float(params.starting_cash_usdc_per_symbol),
         **decision_counts,
-        "fee_bps": float(config.TAKER_FEE_BPS),
+        "fee_bps": float(params.taker_fee_bps),
         "layers": {
-            "trend_existence": dict(config.TREND_EXISTENCE),
-            "trend_quality": dict(config.TREND_QUALITY),
-            "execution": dict(config.EXECUTION),
-            "direction_mode": config.DIRECTION_MODE,
+            "trend_existence": dict(params.trend_existence),
+            "trend_quality": dict(params.trend_quality),
+            "execution": dict(params.execution),
+            "direction_mode": params.direction_mode,
         },
         **exposure_diagnostics,
         **diagnostic_counts,
@@ -705,7 +973,7 @@ def run_backtest_for_symbol(
     if diagnostic_warnings:
         summary["diagnostics_warning"] = "; ".join(diagnostic_warnings)
 
-    write_json(sym_dir / "summary.json", summary)
+    write_json(run_dir / "summary.json", summary)
 
     strategy_label = (
         summary.get("layers", {}).get("direction_mode")
@@ -716,7 +984,7 @@ def run_backtest_for_symbol(
         equity_by_day_path=equity_by_day_path,
         equity_by_day_bh_path=equity_by_day_bh_path,
         trades_path=trades_path,
-        output_path=sym_dir / "quarterly_stats.csv",
+        output_path=run_dir / "quarterly_stats.csv",
         strategy_label=strategy_label,
     )
 
@@ -727,49 +995,54 @@ def main() -> None:
     ap.add_argument("--start", required=True, help="YYYY-MM-DD (UTC)")
     ap.add_argument("--end", required=True, help="YYYY-MM-DD (UTC)")
     ap.add_argument("--symbols", default=",".join(config.SYMBOLS), help="Comma-separated symbols (coins) e.g. BTC,ETH,SOL")
-    ap.add_argument("--run_id", default="", help="Optional run id; default is utc timestamp")
+    ap.add_argument("--run_id", default="", help="Optional run id; default is deterministic")
+    ap.add_argument("--overwrite", action="store_true", help="Overwrite existing run_id outputs")
     args = ap.parse_args()
 
-    start_ms = parse_date_to_ms(args.start)
-    # end is inclusive; add almost a day to catch candles
-    end_ms = parse_date_to_ms(args.end) + 24 * 60 * 60 * 1000 - 1
-
-    run_id = args.run_id.strip() or utc_now_compact()
-    run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id
-    run_dir.mkdir(parents=True, exist_ok=True)
-
-    # config snapshot
-    write_json(run_dir / "config_snapshot.json", {
-        "symbols": args.symbols.split(","),
-        "QUOTE_ASSET": config.QUOTE_ASSET,
-        "MARKET_TYPE": config.MARKET_TYPE,
-        "TIMEFRAMES": dict(config.TIMEFRAMES),
-        "TREND_EXISTENCE": dict(config.TREND_EXISTENCE),
-        "TREND_QUALITY": dict(config.TREND_QUALITY),
-        "EXECUTION": dict(config.EXECUTION),
-        "DIRECTION_MODE": config.DIRECTION_MODE,
-        "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
-        "TAKER_FEE_BPS": config.TAKER_FEE_BPS,
-        "HL_INFO_URL": config.HL_INFO_URL,
-    })
-
-    summaries: List[Dict] = []
+    params = build_params_from_config()
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
-    for sym in symbols:
-        log.info("Backtesting %s from %s to %s ...", sym, args.start, args.end)
-        summ = run_backtest_for_symbol(sym, start_ms, end_ms, run_dir)
-        summaries.append(summ)
+    run_result = run_backtest(
+        symbols,
+        args.start,
+        args.end,
+        params,
+        run_id=args.run_id.strip() or None,
+        overwrite=args.overwrite,
+    )
+    if run_result.get("status") == "multi":
+        run_results = run_result["runs"]
+    else:
+        run_results = [run_result]
 
-    # Aggregate summary
-    write_json(run_dir / "summary_all.json", {
-        "run_id": run_id,
-        "start_date_utc": args.start,
-        "end_date_utc": args.end,
-        "symbols": symbols,
-        "per_symbol": summaries,
-    })
+    for result in run_results:
+        if result.get("status") == "skipped":
+            log.info("Run %s exists, skipped.", result["run_id"])
+            continue
+        run_id = result["run_id"]
+        run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id
+        run_symbols = result["symbols"]
 
-    log.info("Done. Results in %s", run_dir.as_posix())
+        # config snapshot
+        write_json(run_dir / "config_snapshot.json", {
+            "symbols": run_symbols,
+            "start": result["start"],
+            "end": result["end"],
+            "param_hash": result["param_hash"],
+            "data_fingerprint": result["data_fingerprint"],
+            "params_hashable": params.to_hashable_dict(),
+            "QUOTE_ASSET": config.QUOTE_ASSET,
+            "MARKET_TYPE": config.MARKET_TYPE,
+            "TIMEFRAMES": dict(config.TIMEFRAMES),
+            "TREND_EXISTENCE": dict(config.TREND_EXISTENCE),
+            "TREND_QUALITY": dict(config.TREND_QUALITY),
+            "EXECUTION": dict(config.EXECUTION),
+            "DIRECTION_MODE": config.DIRECTION_MODE,
+            "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
+            "TAKER_FEE_BPS": config.TAKER_FEE_BPS,
+            "HL_INFO_URL": config.HL_INFO_URL,
+        })
+
+        log.info("Done. Results in %s", run_dir.as_posix())
 
 if __name__ == "__main__":
     main()

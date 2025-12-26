@@ -16,6 +16,8 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 / (repo root)
 ├─ bot/                         # 策略、回测、数据与指标的核心实现
 │  ├─ backtest.py                # 回测 CLI 入口 + 回测主流程 + 结果落盘
+│  ├─ backtest_params.py         # 回测参数容器 + stable_json + param_hash
+│  ├─ backtest_store.py          # 数据切片/manifest/fingerprint + runs.jsonl 写入
 │  ├─ config.py                  # 参数/常量单一真相源（symbols、timeframes、费用等）
 │  ├─ data_client.py             # 数据下载/缓存/读取（Hyperliquid candleSnapshot）
 │  ├─ indicators.py              # 指标计算（MA、Donchian、log_slope、hlc3 等）
@@ -35,6 +37,8 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 / (repo root)
 ├─ bot/                         # Core strategy/backtest/data/metrics modules
 │  ├─ backtest.py                # Backtest CLI entry + main loop + outputs
+│  ├─ backtest_params.py         # Backtest params container + stable_json + param_hash
+│  ├─ backtest_store.py          # Data slicing/manifest/fingerprint + runs.jsonl append
 │  ├─ config.py                  # Single source of truth for parameters
 │  ├─ data_client.py             # Data download/cache/read (Hyperliquid)
 │  ├─ indicators.py              # Indicator math helpers
@@ -52,8 +56,9 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 **中文**
 
-- **实际 CLI 入口**：`bot/backtest.py` 内的 `main()` 使用 `argparse` 定义 `--start/--end/--symbols/--run_id` 并在 `__main__` 下执行，因此实际运行入口为模块 `bot.backtest`（如 `python -m bot.backtest ...`）。证据：`main()` 与 `if __name__ == "__main__":`（`bot/backtest.py:L725-L775`）。
-- **主流程**：`main()` 解析参数 → 计算时间范围 → 生成 `run_id` → 写入 `config_snapshot.json` → 循环调用 `run_backtest_for_symbol` → 聚合 `summary_all.json`。证据：`bot/backtest.py:L725-L770`。
+- **实际 CLI 入口**：`bot/backtest.py` 内的 `main()` 使用 `argparse` 定义 `--start/--end/--symbols/--run_id` 并在 `__main__` 下执行，因此实际运行入口为模块 `bot.backtest`（如 `python -m bot.backtest ...`）。证据：`main()` 与 `if __name__ == "__main__":`（`bot/backtest.py:L918-L967`）。
+- **可调用核心入口**：`run_backtest(symbols, start, end, params, run_id=None)` 是可 import 的回测入口，返回 run 级别结果并追加 runs.jsonl。证据：`bot/backtest.py:L388-L536`。
+- **主流程**：`main()` 解析参数 → 组装 `BacktestParams` → 调用 `run_backtest`；当传入多个 symbols 时，每个 symbol 会生成独立的 run_id/run_dir 并各自写入 `config_snapshot.json` 与 `summary_all.json`。证据：`bot/backtest.py:L918-L980`。
 - **数据读取**：`run_backtest_for_symbol` 调用 `data_client.ensure_market_data` 拉取/加载趋势与执行时间框架数据（含缓存下载）。证据：`bot/backtest.py:L345-L365` 与 `bot/data_client.py:L308-L394`。
 - **策略/信号计算**：特征计算通过 `strategy.prepare_features_1d` 与 `strategy.prepare_features_exec`，决策通过 `strategy.decide`。证据：`bot/backtest.py:L369-L507`、`bot/strategy.py:L102-L228, L353-L582`。
 - **模拟执行/撮合**：回测内用 cash + position 模型更新仓位与费用，按执行 bar 迭代。证据：仓位/费用更新与 trade 记录写入（`bot/backtest.py:L488-L605`）。
@@ -62,8 +67,9 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 **English**
 
-- **CLI entry**: `bot/backtest.py` defines `main()` with `argparse` arguments (`--start/--end/--symbols/--run_id`) and runs it under `__main__`, so the runnable entry is module `bot.backtest` (e.g., `python -m bot.backtest ...`). Evidence: `main()` + `if __name__ == "__main__"` (`bot/backtest.py:L725-L775`).
-- **Main flow**: `main()` parses args → computes time window → generates `run_id` → writes `config_snapshot.json` → loops `run_backtest_for_symbol` → writes `summary_all.json`. Evidence: `bot/backtest.py:L725-L770`.
+- **CLI entry**: `bot/backtest.py` defines `main()` with `argparse` arguments (`--start/--end/--symbols/--run_id`) and runs it under `__main__`, so the runnable entry is module `bot.backtest` (e.g., `python -m bot.backtest ...`). Evidence: `main()` + `if __name__ == "__main__"` (`bot/backtest.py:L918-L967`).
+- **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is the importable backtest entrypoint and appends runs.jsonl. Evidence: `bot/backtest.py:L388-L536`.
+- **Main flow**: `main()` parses args → builds `BacktestParams` → calls `run_backtest`; when multiple symbols are provided, each symbol produces its own run_id/run_dir and its own `config_snapshot.json` and `summary_all.json`. Evidence: `bot/backtest.py:L918-L980`.
 - **Data read**: `run_backtest_for_symbol` calls `data_client.ensure_market_data` for trend/execution timeframes (cache + download). Evidence: `bot/backtest.py:L345-L365` and `bot/data_client.py:L308-L394`.
 - **Strategy/signal**: features via `strategy.prepare_features_1d` & `strategy.prepare_features_exec`, decisions via `strategy.decide`. Evidence: `bot/backtest.py:L369-L507`, `bot/strategy.py:L102-L228, L353-L582`.
 - **Execution simulation**: cash + position model updated per execution bar, including fees and trade records. Evidence: `bot/backtest.py:L488-L605`.
@@ -74,14 +80,17 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 ```mermaid
 flowchart TD
-    CLI[bot.backtest: main()] -->|parse args| RUN[run_backtest_for_symbol]
-    RUN -->|ensure_market_data| DATA[data_client.ensure_market_data]
+    CLI[bot.backtest: main()] -->|parse args| RUN[run_backtest]
+    RUN -->|slice/manifest| STORE[backtest_store.slice_bars + manifest]
+    RUN -->|single-symbol loop| RUNSYM[run_backtest_for_symbol]
+    RUNSYM -->|ensure_market_data| DATA[data_client.ensure_market_data]
     RUN -->|features| FEAT[strategy.prepare_features_1d / prepare_features_exec]
     RUN -->|decision| DEC[strategy.decide]
     DEC -->|target_pos_frac| SIM[backtest cash+position simulation]
     SIM -->|equity series| MET[metrics.compute_equity_metrics + build_buy_hold_curve]
     MET --> OUT[summary.json / equity_by_day.csv / trades.jsonl]
     OUT --> Q[quarterly_stats.csv]
+    RUN --> RUNS[runs.jsonl append]
 ```
 
 证据：回测主流程、数据读取、特征计算、决策、回测执行、指标、输出对应函数（`bot/backtest.py:L345-L770`, `bot/data_client.py:L308-L394`, `bot/strategy.py:L102-L582`, `bot/metrics.py:L158-L217`, `bot/quarterly_stats.py:L253-L325`）。
@@ -226,16 +235,17 @@ flowchart TD
 
 ## 结果输出位置
 
-- `data/backtest_result/{run_id}/{symbol}/equity_by_day.csv`、`equity_by_day_bh.csv`、`trades.jsonl`、`summary.json`、`equity_by_day_with_benchmark.csv`（若含 `net_exposure`）、`quarterly_stats.csv`。证据：`bot/backtest.py:L639-L721` 与 `bot/quarterly_stats.py:L253-L325`。
-- 运行级别输出：`config_snapshot.json`、`summary_all.json`。证据：`bot/backtest.py:L741-L770`。
+- `data/backtest_result/{run_id}/equity_by_day.csv`、`equity_by_day_bh.csv`、`trades.jsonl`、`summary.json`、`equity_by_day_with_benchmark.csv`（若含 `net_exposure`）、`quarterly_stats.csv`。证据：`bot/backtest.py:L706-L866` 与 `bot/quarterly_stats.py:L253-L325`。
+- 运行级别输出：`config_snapshot.json`、`run_record.json`、`runs.jsonl`。证据：`bot/backtest.py:L918-L980` 与 `bot/backtest_store.py:L97-L115`。
 
 ## 可复现性检查
 
-- **run_id 默认依赖当前时间**：`utc_now_compact()` 使用 `datetime.now(timezone.utc)`，用于默认 `run_id`。证据：`bot/backtest.py:L52-L53, L737-L739`。
-- **数据读取依赖实时网络**：`data_client` 通过 `requests.post` 调用 Hyperliquid API；若缓存不足将下载。证据：`bot/data_client.py:L156-L215, L380-L392`。
-- **当前时间参与数据窗口**：`fetch_latest` 和 `fetch_candle_snapshot` 依赖 `now_ms()`/`time.time()`，且会过滤“未收盘 K 线”。证据：`bot/data_client.py:L66-L67, L211-L229`。
-- **已做的确定性处理**：交易文件输出前会先删除旧文件（保证文件内容与顺序由当前回测结果决定）。证据：`bot/backtest.py:L659-L663`。
-- **缺失的可复现标识**：未看到 `run_id` 的参数哈希或数据指纹记录（仅写入 `config_snapshot.json`）。证据：`bot/backtest.py:L741-L754` 中仅保存 config 与部分 CLI 参数。
+- **run_id 默认确定性**：`run_backtest` 使用 `param_hash` 与 `data_fingerprint` 组装默认 `run_id`（`{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`）。证据：`bot/backtest.py:L402-L477`。
+- **参数哈希与数据指纹**：`BacktestParams.to_hashable_dict` + `calc_param_hash` 生成 `param_hash`，`backtest_store.build_data_manifest`/`calc_data_fingerprint` 生成 `data_fingerprint` 并写入 runs.jsonl。证据：`bot/backtest_params.py:L1-L63`、`bot/backtest_store.py:L70-L115`、`bot/backtest.py:L402-L533`。
+- **strategy_version 来源**：`bot/strategy.py::STRATEGY_VERSION`，进入 `BacktestParams.to_hashable_dict` 从而影响 `param_hash` 与默认 `run_id`，并落盘到 `run_record.json`/`runs.jsonl`。证据：`bot/strategy.py:L27-L30`、`bot/backtest_params.py:L29-L56`、`bot/backtest.py:L502-L560`。
+- **数据读取仍依赖实时网络**：`data_client` 通过 `requests.post` 调用 Hyperliquid API；若缓存不足将下载。证据：`bot/data_client.py:L156-L215, L380-L392`。
+- **当前时间仍用于数据抓取的闭合K线过滤**：`fetch_candle_snapshot` 使用 `now_ms()` 过滤未收盘K线，但回测切片不再使用 `now()`。证据：`bot/data_client.py:L211-L229` 与 `bot/backtest_store.py:L28-L64`。
+- **确定性写入**：交易文件输出前会先删除旧文件（保证文件内容与顺序由当前回测结果决定）。证据：`bot/backtest.py:L733-L739`。
 
 ## 最小改造切入点（仅列位置，不写改法）
 
@@ -248,8 +258,8 @@ flowchart TD
 
 ## Output locations
 
-- `data/backtest_result/{run_id}/{symbol}/equity_by_day.csv`, `equity_by_day_bh.csv`, `trades.jsonl`, `summary.json`, `equity_by_day_with_benchmark.csv` (if `net_exposure`), `quarterly_stats.csv`. Evidence: `bot/backtest.py:L639-L721`, `bot/quarterly_stats.py:L253-L325`.
-- Run-level outputs: `config_snapshot.json`, `summary_all.json`. Evidence: `bot/backtest.py:L741-L770`.
+- `data/backtest_result/{run_id}/equity_by_day.csv`, `equity_by_day_bh.csv`, `trades.jsonl`, `summary.json`, `equity_by_day_with_benchmark.csv` (if `net_exposure`), `quarterly_stats.csv`. Evidence: `bot/backtest.py:L639-L721`, `bot/quarterly_stats.py:L253-L325`.
+- Run-level outputs: `config_snapshot.json`, `run_record.json`, `runs.jsonl`. Evidence: `bot/backtest.py:L918-L980`.
 
 ## Reproducibility audit
 
@@ -266,16 +276,17 @@ flowchart TD
 - `bot/data_client.py::ensure_market_data` / `fetch_candle_snapshot`: data download boundary for deterministic data control. Evidence: `bot/data_client.py:L187-L394`.
 - Output block in `bot/backtest.py`: centralized result storage. Evidence: `bot/backtest.py:L639-L721`.
 
-# Minimal Retrofit Plan / 改造接口建议（不改结构，只加能力）
+# Minimal Retrofit Summary / 改造能力落地（当前实现）
 
 **中文**
 
-- **建议新增接口**：`run_backtest(symbol, start, end, params, run_id, ...)` 放在 `bot/backtest.py`，紧挨 `run_backtest_for_symbol`。理由：该模块已有 CLI/输出逻辑与单标的回测实现，是现有“回测核心”的自然承载点。证据：`bot/backtest.py:L345-L770`。
-- **参数汇总方式**：复用 `main()` 中已有的 `config_snapshot.json` 构造逻辑，统一将 `config` + CLI 参数组装成 `dict` 或 `dataclass`，再传给新的核心函数。证据：`bot/backtest.py:L741-L754`。
-- **结果落盘位置**：保持当前 `run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id` 与 `run_backtest_for_symbol` 内各类输出路径不变，避免改变现有 `python -m bot.backtest` 跑法。证据：`bot/backtest.py:L737-L739, L639-L721`。
+- **可调用入口**：`run_backtest(symbols, start, end, params, run_id=None)` 已落地，并由 CLI 调用；参数集中于 `BacktestParams`。证据：`bot/backtest.py:L388-L536`、`bot/backtest_params.py:L1-L63`。
+- **数据可复现元信息**：`backtest_store.build_data_manifest` 生成 manifest、`calc_data_fingerprint` 生成指纹并写入 `runs.jsonl`。证据：`bot/backtest_store.py:L70-L115`、`bot/backtest.py:L402-L533`。
+- **输出路径保持**：仍使用 `run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id` 且 per-symbol 输出路径不变。证据：`bot/backtest.py:L481-L866`。
 
 **English**
 
-- **New interface suggestion**: add `run_backtest(symbol, start, end, params, run_id, ...)` in `bot/backtest.py` near `run_backtest_for_symbol`. Rationale: this module already hosts the CLI, output logic, and single-symbol engine. Evidence: `bot/backtest.py:L345-L770`.
-- **Param aggregation**: reuse the existing `config_snapshot.json` construction in `main()` to assemble `config` + CLI args into a `dict`/`dataclass` passed into the new core function. Evidence: `bot/backtest.py:L741-L754`.
-- **Output placement**: keep `run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id` and the current per-symbol output paths unchanged so `python -m bot.backtest` remains compatible. Evidence: `bot/backtest.py:L737-L739, L639-L721`.
+- **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is now implemented and invoked by CLI; params are centralized in `BacktestParams`. Evidence: `bot/backtest.py:L388-L536`, `bot/backtest_params.py:L1-L63`.
+- **Repro metadata**: `backtest_store.build_data_manifest` builds manifests, `calc_data_fingerprint` fingerprints them, and `runs.jsonl` is appended. Evidence: `bot/backtest_store.py:L70-L115`, `bot/backtest.py:L402-L533`.
+- **strategy_version source**: `bot/strategy.py::STRATEGY_VERSION` is included in `BacktestParams.to_hashable_dict`, affecting `param_hash` and the default `run_id`, and is persisted to `run_record.json`/`runs.jsonl`. Evidence: `bot/strategy.py:L27-L30`, `bot/backtest_params.py:L29-L56`, `bot/backtest.py:L502-L560`.
+- **Output placement preserved**: `run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id` with existing per-symbol output paths unchanged. Evidence: `bot/backtest.py:L481-L866`.
