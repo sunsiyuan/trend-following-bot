@@ -2,11 +2,11 @@
 
 **中文**
 
-本仓库核心代码集中在 `bot/` 目录，包含回测入口、策略逻辑、数据获取与指标计算等模块。本文仅基于仓库内真实代码梳理“项目结构与策略文件关系”，并标注每个关键结论的证据位置（文件路径 + 行号范围）。策略/回测均通过同一套 `strategy.decide` 逻辑执行，回测入口位于 `bot/backtest.py`，并输出结果到 `data/backtest_result/...`。证据：`bot/backtest.py` 顶部描述与 `run_backtest_for_symbol`、输出落盘逻辑（`bot/backtest.py:L1-L13, L345-L723`）。
+本仓库核心代码集中在 `bot/` 目录，包含回测入口、策略逻辑、数据获取与指标计算等模块。本文仅基于仓库内真实代码梳理“项目结构与策略文件关系”，并标注每个关键结论的证据位置（文件路径 + 行号范围）。策略/回测均通过同一套 `strategy.decide` 逻辑执行，回测入口位于 `bot/backtest.py`，并输出结果到 `data/backtest_result/...`；新增排名脚本 `bot/rank_runs.py` 读取 `runs.jsonl` 与 run_dir 产出 `data/backtest_rank/{rank_id}/...`。证据：`bot/backtest.py:L1-L13, L345-L723` 与 `bot/rank_runs.py:L1-L718`。
 
 **English**
 
-The core code lives in `bot/` and includes the backtest entry, strategy logic, data access, and metrics. This document maps structure and strategy file relationships based strictly on the repository’s actual code, with evidence for each key statement (path + line range). Both backtest and live flow call the shared `strategy.decide` logic; the backtest entry is `bot/backtest.py` and outputs results under `data/backtest_result/...`. Evidence: top-level backtest description and `run_backtest_for_symbol` output logic (`bot/backtest.py:L1-L13, L345-L723`).
+The core code lives in `bot/` and includes the backtest entry, strategy logic, data access, and metrics. This document maps structure and strategy file relationships based strictly on the repository’s actual code, with evidence for each key statement (path + line range). Both backtest and live flow call the shared `strategy.decide` logic; the backtest entry is `bot/backtest.py` and outputs results under `data/backtest_result/...`, while the ranking script `bot/rank_runs.py` reads `runs.jsonl` + run_dir outputs and emits `data/backtest_rank/{rank_id}/...`. Evidence: `bot/backtest.py:L1-L13, L345-L723` and `bot/rank_runs.py:L1-L718`.
 
 # Repo Tree / 仓库树
 
@@ -23,10 +23,13 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 │  ├─ indicators.py              # 指标计算（MA、Donchian、log_slope、hlc3 等）
 │  ├─ metrics.py                 # 回测指标计算（收益、回撤、Sharpe、Ulcer 等）
 │  ├─ quarterly_stats.py         # 按季度统计（基于 equity/trades 输出）
+│  ├─ rank_runs.py               # 回测结果排名/对比（runs.jsonl -> backtest_rank）
 │  ├─ strategy.py                # 策略逻辑（特征计算 + 决策）
 │  └─ main.py                    # 最小 live runner（CLI 入口，输出最新决策）
 ├─ docs/                         # 文档（非回测流程本体）
+│  └─ KEY_METRICS.md             # 排名/对比指标契约与公式
 └─ data/                         # 数据与回测结果落盘目录（运行时生成）
+   └─ backtest_rank/             # 排名结果输出目录（run 级比较）
 ```
 
 证据：文件职责见各文件头部注释与导入关系，例如 `backtest.py` 的职责描述（`bot/backtest.py:L1-L13`）、`data_client.py` 的职责说明（`bot/data_client.py:L1-L19`）、`strategy.py` 的策略说明（`bot/strategy.py:L1-L16`）、`metrics.py` 的指标说明（`bot/metrics.py:L1-L5`）、`main.py` 的 live runner 说明（`bot/main.py:L1-L10`）。
@@ -44,10 +47,13 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 │  ├─ indicators.py              # Indicator math helpers
 │  ├─ metrics.py                 # Backtest performance metrics
 │  ├─ quarterly_stats.py         # Quarterly stats export
+│  ├─ rank_runs.py               # Backtest run ranking (runs.jsonl -> backtest_rank)
 │  ├─ strategy.py                # Strategy features + decision logic
 │  └─ main.py                    # Minimal live runner (latest decision)
 ├─ docs/                         # Documentation (non-execution path)
+│  └─ KEY_METRICS.md             # Ranking/compare metrics contract
 └─ data/                         # Runtime data/result storage
+   └─ backtest_rank/             # Ranking result outputs
 ```
 
 Evidence: module-level docstrings and imports describe responsibilities (e.g., `bot/backtest.py:L1-L13`, `bot/data_client.py:L1-L19`, `bot/strategy.py:L1-L16`, `bot/metrics.py:L1-L5`, `bot/main.py:L1-L10`).
@@ -238,6 +244,7 @@ flowchart TD
 - `data/backtest_result/{run_id}/equity_by_day.csv`、`equity_by_day_bh.csv`、`trades.jsonl`、`summary.json`、`equity_by_day_with_benchmark.csv`（若含 `net_exposure`）、`quarterly_stats.csv`。证据：`bot/backtest.py:L706-L866` 与 `bot/quarterly_stats.py:L253-L325`。
 - 运行级别输出：`config_snapshot.json`、`run_record.json`、`runs.jsonl`。证据：`bot/backtest.py:L918-L980` 与 `bot/backtest_store.py:L97-L115`。
 - `quarterly_stats.csv` 主要字段包含 `pnl`、`return_annualized`、`sharpe_annualized` 等（`return_annualized` 为季度内首尾 equity 复利年化）。证据：`bot/quarterly_stats.py:L151-L223, L279-L325`。
+- 排名输出：`data/backtest_rank/{rank_id}/rank_results.json` 与 `rank_results.md`（可选 `rank_spec.json` 复制）。证据：`bot/rank_runs.py:L589-L714`。
 
 ## 可复现性检查
 
@@ -262,6 +269,7 @@ flowchart TD
 - `data/backtest_result/{run_id}/equity_by_day.csv`, `equity_by_day_bh.csv`, `trades.jsonl`, `summary.json`, `equity_by_day_with_benchmark.csv` (if `net_exposure`), `quarterly_stats.csv`. Evidence: `bot/backtest.py:L639-L721`, `bot/quarterly_stats.py:L253-L325`.
 - Run-level outputs: `config_snapshot.json`, `run_record.json`, `runs.jsonl`. Evidence: `bot/backtest.py:L918-L980`.
 - `quarterly_stats.csv` key fields include `pnl`, `return_annualized`, `sharpe_annualized` (with `return_annualized` as the compound annualized return over the quarter span). Evidence: `bot/quarterly_stats.py:L151-L223, L279-L325`.
+- Ranking outputs: `data/backtest_rank/{rank_id}/rank_results.json` and `rank_results.md` (optional `rank_spec.json` copy). Evidence: `bot/rank_runs.py:L589-L714`.
 
 ## Reproducibility audit
 
