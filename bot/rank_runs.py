@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 from dataclasses import dataclass
@@ -24,7 +25,53 @@ UI_FLOOR = 0.05
 MDD_GUARD = -0.30
 GAMMA = 0.5
 
-TOP_N = 20
+PRIMARY_COLS = [
+    "run_id",
+    "symbol",
+    "symbols",
+    "start",
+    "end",
+    "param_hash",
+    "data_fingerprint",
+    "strategy_version",
+    "final",
+    "E",
+    "ui",
+    "mdd",
+    "mdd_pass",
+    "R_total",
+    "R_bh_total",
+    "worst_final",
+    "p25_final",
+    "median_final",
+    "p75_final",
+    "best_final",
+    "p0_E",
+    "p25_E",
+    "p50_E",
+    "p75_E",
+    "p100_E",
+    "hit_rate",
+    "window_count",
+    "pnl",
+    "return_annualized",
+    "sharpe_annualized",
+    "upi_annualized",
+    "avg_net_exposure",
+    "pct_days_in_position",
+    "pct_days_long",
+    "pct_days_short",
+    "trade_count",
+    "start_equity",
+    "end_equity",
+    "fees_paid",
+    "turnover_proxy",
+    "max_consecutive_days_in_position",
+    "max_flat_streak_days",
+    "avg_holding_period_days",
+    "record_line_no",
+    "invalid_reasons",
+]
 
 
 @dataclass
@@ -549,45 +596,28 @@ def _rank_runs(records: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return sorted(records, key=sort_key, reverse=True)
 
 
-def _render_markdown(records: List[Dict[str, Any]], invalid: List[Dict[str, Any]]) -> str:
-    lines = [
-        "# Rank Results",
-        "",
-        f"Top {TOP_N} runs (sorted by mdd_pass then final):",
-        "",
-        "| run_id | symbol | final | E | mdd_pass | hit_rate | p25_final | median_final | p25_E | median_E | trade_count | avg_net_exposure | pct_days_in_position | fees_paid | turnover_proxy | max_consecutive_days_in_position | max_flat_streak_days | avg_holding_period_days |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    for row in records[:TOP_N]:
-        lines.append(
-            "| {run_id} | {symbol} | {final} | {E} | {mdd_pass} | {hit_rate} | {p25_final} | {median_final} | {p25_E} | {p50_E} | {trade_count} | {avg_net_exposure} | {pct_days_in_position} | {fees_paid} | {turnover_proxy} | {max_consecutive_days_in_position} | {max_flat_streak_days} | {avg_holding_period_days} |".format(
-                run_id=row.get("run_id"),
-                symbol=row.get("symbol"),
-                final=row.get("final"),
-                E=row.get("E"),
-                mdd_pass=row.get("mdd_pass"),
-                hit_rate=row.get("hit_rate"),
-                p25_final=row.get("p25_final"),
-                median_final=row.get("median_final"),
-                p25_E=row.get("p25_E"),
-                p50_E=row.get("p50_E"),
-                trade_count=row.get("trade_count"),
-                avg_net_exposure=row.get("avg_net_exposure"),
-                pct_days_in_position=row.get("pct_days_in_position"),
-                fees_paid=row.get("fees_paid"),
-                turnover_proxy=row.get("turnover_proxy"),
-                max_consecutive_days_in_position=row.get("max_consecutive_days_in_position"),
-                max_flat_streak_days=row.get("max_flat_streak_days"),
-                avg_holding_period_days=row.get("avg_holding_period_days"),
-            )
-        )
+def _serialize_csv_value(value: Any) -> Any:
+    if value is None:
+        return ""
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    return value
 
-    if invalid:
-        lines.extend(["", "## Invalid runs", ""])
-        for row in invalid:
-            reasons = ", ".join(row.get("invalid_reasons") or [])
-            lines.append(f"- {row.get('run_id')}: {reasons}")
-    return "\n".join(lines) + "\n"
+
+def _build_rank_columns(rows: List[Dict[str, Any]]) -> List[str]:
+    all_keys: set[str] = set()
+    for row in rows:
+        all_keys.update(row.keys())
+    remaining = sorted(key for key in all_keys if key not in PRIMARY_COLS)
+    return PRIMARY_COLS + remaining
+
+
+def write_rank_results_csv(path: Path, rows: List[Dict[str, Any]], columns: List[str]) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({col: _serialize_csv_value(row.get(col)) for col in columns})
 
 
 def main() -> None:
@@ -715,11 +745,8 @@ def main() -> None:
         encoding="utf-8",
     )
 
-    invalid_sorted = [item for item in ranked if item.get("invalid_reasons")]
-    (output_dir / "rank_results.md").write_text(
-        _render_markdown(ranked, invalid_sorted),
-        encoding="utf-8",
-    )
+    columns = _build_rank_columns(ranked)
+    write_rank_results_csv(output_dir / "rank_results.csv", ranked, columns)
 
 
 if __name__ == "__main__":
