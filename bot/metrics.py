@@ -31,6 +31,7 @@ def max_drawdown_from_equity(equity: pd.Series) -> float:
     """
     if equity.empty:
         return 0.0
+    # Drawdown computed vs rolling peak of equity.
     running_max = equity.cummax()
     dd = (equity / running_max) - 1.0
     return float(dd.min())
@@ -40,6 +41,7 @@ def daily_returns_from_equity(equity: pd.Series) -> pd.Series:
     """
     Convert an equity curve into daily percentage returns.
     """
+    # pct_change uses consecutive equity values; first return is dropped.
     return equity.pct_change(fill_method=None).dropna()
 
 
@@ -51,6 +53,7 @@ def sharpe_ratio_from_daily_returns(
     """
     Compute the annualized Sharpe ratio from daily returns.
     """
+    # rf_daily converts annual risk-free rate to daily equivalent.
     rf_daily = (1 + rf_annual) ** (1 / periods_per_year) - 1
     excess = daily_ret - rf_daily
     std = excess.std(ddof=1)
@@ -60,6 +63,7 @@ def sharpe_ratio_from_daily_returns(
 
 
 def equity_returns_with_first_zero(equity: ArrayLike) -> np.ndarray:
+    # Return series with first return forced to 0.0 (length matches equity).
     values = _to_equity_array(equity)
     if values.size == 0:
         return np.array([], dtype="float64")
@@ -78,6 +82,7 @@ def sharpe_annualized_from_returns(
     values = _to_equity_array(returns)
     if values.size == 0:
         return float("nan")
+    # ddof=0 uses population std for provided return series.
     std = values.std(ddof=0)
     if std == 0:
         return float("nan")
@@ -88,6 +93,7 @@ def mdd_and_ulcer_index(equity: ArrayLike) -> tuple[float, float]:
     values = _to_equity_array(equity)
     if values.size == 0:
         return float("nan"), float("nan")
+    # mdd uses min drawdown; ui uses RMS of drawdown depth.
     running_max = np.maximum.accumulate(values)
     with np.errstate(divide="ignore", invalid="ignore"):
         dd_series = values / running_max - 1.0
@@ -115,6 +121,7 @@ def ulcer_index(equity: ArrayLike) -> float:
         log.warning("Ulcer index skipping non-positive equity values.")
         values = positives
     running_max = np.maximum.accumulate(values)
+    # Ulcer index uses RMS of percentage drawdowns (negative values).
     drawdowns = values / running_max - 1.0
     return float(np.sqrt(np.mean(drawdowns**2)))
 
@@ -130,6 +137,7 @@ def ulcer_performance_index(equity: ArrayLike) -> float:
             return 0.0
         log.warning("Ulcer performance index skipping non-positive equity values.")
         values = positives
+    # UPI = total_return / ulcer_index (with special-case handling when ui == 0).
     total_ret = values[-1] / values[0] - 1.0
     ui = ulcer_index(values)
     if ui == 0.0:
@@ -162,6 +170,7 @@ def build_buy_hold_curve(
     if non_nan.empty:
         return pd.Series(index=dates, dtype="float64")
     aligned_close = aligned_close.ffill().bfill()
+    # Buy-and-hold uses the first non-NaN close as entry price.
     entry_px = float(non_nan.iloc[0])
     qty = starting_cash / entry_px
     equity = qty * aligned_close
@@ -176,6 +185,7 @@ def compute_equity_metrics(
     """
     Compute standard equity curve metrics.
     """
+    # Drops NaNs; if empty, returns flat metrics vs starting cash.
     equity = pd.to_numeric(equity, errors="coerce").dropna()
     if equity.empty:
         return {

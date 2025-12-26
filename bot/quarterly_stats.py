@@ -52,6 +52,7 @@ def _read_equity_rows(
             return []
         df["date_utc"] = pd.to_datetime(df["date_utc"], errors="coerce")
         df = df.dropna(subset=["date_utc"]).sort_values("date_utc")
+        # Pick first available equity column from allowed list.
         equity_col = next((c for c in equity_columns if c in df.columns), None)
         if equity_col is None:
             return []
@@ -148,6 +149,7 @@ def _compute_trade_metrics(trades_path: Path) -> Optional[dict]:
                 dt_value = _parse_date(str(date_value))
                 if dt_value is None:
                     return None
+                # Only count strategy-initiated rebalances (gate_passed).
                 if action != "REBALANCE" or reason != "gate_passed":
                     continue
                 if fee is None:
@@ -183,6 +185,7 @@ def _build_row(
     if equity and start_equity != 0:
         pnl = end_equity / start_equity - 1.0
 
+    # Returns include a 0.0 first element to align length to equity.
     returns = metrics.equity_returns_with_first_zero(equity)
     sharpe = metrics.sharpe_annualized_from_returns(returns)
 
@@ -203,6 +206,7 @@ def _build_row(
             exposure_values = [float(value) for value in exposures]
             avg_exposure = _mean(exposure_values)
             eps = 1e-6
+            # Exposure-based position/day diagnostics derived from net_exposure sign/magnitude.
             pct_days_in_position = sum(abs(v) > eps for v in exposure_values) / days
             pct_days_long = sum(v > eps for v in exposure_values) / days
             pct_days_short = sum(v < -eps for v in exposure_values) / days
@@ -253,6 +257,7 @@ def generate_quarterly_stats(
     output_path: Path,
     strategy_label: str,
 ) -> None:
+    # Build per-quarter rows for strategy + buy-hold, then write CSV.
     strategy_rows = _read_equity_rows(
         equity_by_day_path,
         ["equity_usdc", "equity"],

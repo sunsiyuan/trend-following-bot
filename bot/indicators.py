@@ -26,6 +26,7 @@ def moving_average(series: SeriesLike, window: int, ma_type: MAType = "sma") -> 
 
     is_series = isinstance(series, pd.Series)
     ser = series if is_series else pd.Series(series)
+    # min_periods=window enforces warmup: initial window-1 values are NaN.
     if ma_type == "sma":
         result = ser.rolling(window, min_periods=window).mean()
     else:
@@ -41,11 +42,13 @@ def log_slope(series: SeriesLike, k: int) -> SeriesLike:
 
     is_series = isinstance(series, pd.Series)
     arr = series if is_series else np.asarray(series)
+    # log requires strictly positive values; this raises if any non-positive input.
     if np.any(arr <= 0):
         raise ValueError("log_slope requires all values to be positive")
 
     if is_series:
         log_ser = np.log(series)
+        # shift(k) introduces k-bar warmup NaNs.
         slope = (log_ser - log_ser.shift(k)) / float(k)
         return slope
 
@@ -65,6 +68,7 @@ def donchian(high: pd.Series, low: pd.Series, window: int) -> Tuple[pd.Series, p
     Donchian channel (upper/lower) of the PREVIOUS `window` bars.
     Use shift(1) to avoid look-ahead bias and to make breakouts triggerable.
     """
+    # rolling(window) with min_periods=window yields NaN until warmup completes.
     upper = high.rolling(window, min_periods=window).max().shift(1)
     lower = low.rolling(window, min_periods=window).min().shift(1)
     return upper, lower
@@ -76,6 +80,7 @@ def hlc3(high: pd.Series | None, low: pd.Series | None, close: pd.Series) -> pd.
     if high is None or low is None:
         return close.copy()
     hlc3_val = (high + low + close) / 3.0
+    # Preserve close when high/low are missing or NaN for that row.
     valid = high.notna() & low.notna()
     return hlc3_val.where(valid, close)
 
@@ -86,6 +91,7 @@ def quantize_toward_zero(x: pd.Series, q: float) -> pd.Series:
     """
     if q <= 0:
         raise ValueError("q must be positive")
+    # floor(abs(x)/q) quantizes magnitude toward zero.
     values = x.to_numpy(dtype=float)
     abs_vals = np.abs(values)
     floored = np.floor(abs_vals / q) * q
