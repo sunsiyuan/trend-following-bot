@@ -33,7 +33,7 @@ def latest_decision_for_symbol(symbol: str) -> Dict[str, object]:
     trend_tf = config.TIMEFRAMES["trend"]
     exec_tf = config.TIMEFRAMES["execution"]
 
-    # A bit more than needed for rolling windows
+    # A bit more than needed for rolling windows and execution gating.
     trend_lookback = max(config.TREND_EXISTENCE["window"], config.TREND_QUALITY["window"]) + 20
     exec_lookback = config.EXECUTION["window"] + max(
         config.EXECUTION["build_min_step_bars"],
@@ -43,7 +43,7 @@ def latest_decision_for_symbol(symbol: str) -> Dict[str, object]:
     candles_1d = data_client.fetch_latest(symbol, trend_tf, lookback_candles=trend_lookback)
     candles_ex = data_client.fetch_latest(symbol, exec_tf, lookback_candles=exec_lookback)
 
-    # Build dfs (same schema as cache loader)
+    # Build dfs (same schema as cache loader).
     def candles_to_df(candles):
         if not candles:
             return pd.DataFrame(columns=["open_ts","close_ts","open","high","low","close","volume","trades"]).set_index("close_ts")
@@ -70,7 +70,8 @@ def latest_decision_for_symbol(symbol: str) -> Dict[str, object]:
     ts_ms = int(df_ex_feat.index.max())
     exec_bar_idx = len(df_ex_feat) - 1
 
-    state = strat.StrategyState()  # stateless demo; persist this if you want real cooldown behavior
+    # Stateless demo; persist state to honor flip cooldowns across runs.
+    state = strat.StrategyState()
     decision = strat.decide(ts_ms, exec_bar_idx, df_1d_feat, df_ex_feat, state)
     decision["symbol"] = symbol
     decision["ts_ms"] = ts_ms

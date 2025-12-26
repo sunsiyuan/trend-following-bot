@@ -83,6 +83,7 @@ def compute_api_window_start_ts_ms(
     return int(end_ms - limit * timeframe_ms)
 
 def get_cache_earliest_ts_ms(symbol: str, interval: str) -> Optional[int]:
+    # Scan cached jsonl for minimum open timestamp.
     path = market_data_path(symbol, interval)
     rows = read_jsonl(path)
     if not rows:
@@ -208,7 +209,7 @@ def fetch_candle_snapshot(
     data = _post_info(payload)
     if not isinstance(data, list):
         raise HyperliquidAPIError(f"Unexpected candleSnapshot response: {type(data)}")
-    # Drop any candle that is not closed yet (defensive)
+    # Drop any candle that is not closed yet (defensive).
     now = now_ms()
     closed = [c for c in data if int(c.get("T", 0)) <= now]
     return closed
@@ -248,6 +249,7 @@ def download_history_to_cache(
     cursor = int(start_ms)
     total_new = 0
 
+    # Paginate by time window; advance by last open time + interval.
     while cursor < end_ms:
         window_end = min(int(end_ms), cursor + window_candles * ms)
         batch = fetch_candle_snapshot(symbol, interval, cursor, window_end)
@@ -279,6 +281,7 @@ def load_klines_df_from_cache(symbol: str, interval: str) -> pd.DataFrame:
     if not rows:
         return pd.DataFrame(columns=["open_ts","close_ts","open","high","low","close","volume","trades"]).set_index("close_ts")
 
+    # Parse rows to typed schema; malformed rows are skipped.
     records = []
     for r in rows:
         try:
@@ -313,6 +316,7 @@ def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Option
     effective_start_ts_ms = requested_start_ts_ms
     skip_download = False
 
+    # Clamp requests to earliest available data and API window limits.
     if interval == "1d" and earliest_fact_ts_ms is not None and requested_start_ts_ms < earliest_fact_ts_ms:
         effective_start_ts_ms = earliest_fact_ts_ms
         log.warning({
@@ -373,6 +377,7 @@ def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Option
 
     df = load_klines_df_from_cache(symbol, interval)
 
+    # Download only if cache is missing or does not cover the requested range.
     if not skip_download:
         if df.empty:
             download_history_to_cache(symbol, interval, effective_start_ts_ms, requested_end_ts_ms)

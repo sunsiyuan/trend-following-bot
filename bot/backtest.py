@@ -63,6 +63,7 @@ def append_jsonl(path: Path, rows: List[Dict]) -> None:
             f.write(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n")
 
 def compute_trade_decision_counts(trades: List[Dict]) -> Dict:
+    # Count decision/action outcomes from trade records.
     decision_count = len(trades)
     rebalance_count = 0
     hold_count = 0
@@ -111,6 +112,7 @@ def compute_diagnostic_counts(
             ts_ms = int(ts_num * 1000)
         return ms_to_ymd(ts_ms)
 
+    # Latest trade per day is used for daily diagnostics.
     if trades_jsonl_path.exists():
         with trades_jsonl_path.open("r", encoding="utf-8") as f:
             for idx, line in enumerate(f):
@@ -140,6 +142,7 @@ def compute_diagnostic_counts(
     days_total = 0
     flat_by_day: Dict[str, bool] = {}
     dates: List[str] = []
+    # Use equity_by_day for coverage + net exposure; fallback to trades if missing.
     if equity_by_day_csv_path.exists():
         df_day = pd.read_csv(equity_by_day_csv_path)
         if "date_utc" in df_day.columns:
@@ -348,7 +351,7 @@ def run_backtest_for_symbol(
     """
     One-symbol backtest (simple and debuggable). Multi-symbol aggregation is handled by caller.
     """
-    # Warmup: ensure enough data before start for indicator windows
+    # Warmup: fetch extra history for indicator windows + execution cooldown.
     ms_1d = data_client.interval_to_ms(config.TIMEFRAMES["trend"])
     ms_ex = data_client.interval_to_ms(config.TIMEFRAMES["execution"])
     warmup_1d = max(config.TREND_EXISTENCE["window"], config.TREND_QUALITY["window"]) + 10
@@ -389,6 +392,7 @@ def run_backtest_for_symbol(
         return "LONG" if position_qty > 0 else "SHORT"
 
     def build_day_row(day: str, mark_price: float) -> Dict:
+        # Daily equity snapshot uses mark-to-market at last execution close.
         equity = cash + qty * mark_price
         position_value = abs(qty) * mark_price
         net_exposure = position_value / equity if abs(equity) > 1e-12 else 0.0
@@ -509,7 +513,7 @@ def run_backtest_for_symbol(
         reason = decision.get("reason") or "already_at_target"
         current_notional = qty * price
         current_pos_frac = current_notional / equity if abs(equity) > 1e-12 else 0.0
-        # Use current equity pre-trade to translate fraction -> notional
+        # Use current equity pre-trade to translate fraction -> notional.
         target_notional = target_frac * equity
         next_pos_frac = target_frac
         delta_pos_frac = next_pos_frac - current_pos_frac
@@ -550,11 +554,11 @@ def run_backtest_for_symbol(
         dq = delta_notional / price
         equity_before = equity
 
-        # Realized pnl bookkeeping (avg entry)
+        # Realized pnl bookkeeping (avg entry) before cash/qty update.
         new_avg_entry, realized_pnl = update_avg_and_realized(qty, avg_entry, dq, price)
         realized_pnl_cum += realized_pnl
 
-        # Apply trade to cash + position
+        # Apply trade to cash + position; fee is applied to absolute notional.
         cash -= delta_notional
         fee = abs(delta_notional) * fee_rate
         cash -= fee
@@ -563,7 +567,7 @@ def run_backtest_for_symbol(
 
         equity_after = cash + qty * price
 
-        # Update state position frac based on post-trade equity
+        # Update state position frac based on post-trade equity.
         if abs(equity_after) > 1e-9:
             state.position.frac = (qty * price) / equity_after
         else:

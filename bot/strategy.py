@@ -107,6 +107,7 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     close = out["close"]
     high = out["high"] if "high" in out.columns else None
     low = out["low"] if "low" in out.columns else None
+    # HLC3 price proxy: (high + low + close) / 3 with close fallback when high/low missing.
     out["hlc3"] = hlc3(high, low, close)
     price_series = out["hlc3"]
     # Trend existence
@@ -114,9 +115,11 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     if te["indicator"] == "ma":
         ma_type = te.get("ma_type", "sma")
         slope_k = int(te.get("slope_k", 2))
+        # trend_ma: moving average on hlc3; slope uses k-lag log change per bar.
         out["trend_ma"] = moving_average(price_series, te["window"], ma_type)
         out["trend_log_slope"] = log_slope(out["trend_ma"], slope_k)
     elif te["indicator"] == "donchian":
+        # Donchian uses prior-window extremes (shifted by 1 bar in indicator helper).
         upper, lower = donchian(out["high"], out["low"], te["window"])
         out["trend_upper"] = upper
         out["trend_lower"] = lower
@@ -126,6 +129,7 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     # Trend quality
     tq = config.TREND_QUALITY
     quality_ma_type = tq.get("ma_type", "sma")
+    # quality_ma is always MA-based per config; shift(1) used for any potential lookback use.
     out["quality_ma"] = moving_average(price_series, tq["window"], quality_ma_type)
     out["quality_ma_prev"] = out["quality_ma"].shift(1)
     slope_k = int(config.TREND_EXISTENCE.get("slope_k", 2))
@@ -134,20 +138,28 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
     if te["indicator"] == "ma" and tq["indicator"] == "ma":
         w_fast = int(config.TREND_EXISTENCE["window"])
         n_vol = config.vol_window_from_fast_window(w_fast)
+        # logret: log(hlc3_t) - log(hlc3_{t-1}); rolling std uses min_periods=n_vol.
         out["logret"] = np.log(price_series).diff()
+        # delta: fast-slow log-slope mismatch.
         out["delta"] = out["trend_log_slope"] - out["quality_log_slope"]
         out["sigma_price"] = out["logret"].rolling(n_vol, min_periods=n_vol).std()
+        # alpha_f/alpha_s use EMA-equivalent smoothing factors regardless of MA type.
         alpha_f = 2.0 / (float(config.TREND_EXISTENCE["window"]) + 1.0)
         alpha_s = 2.0 / (float(config.TREND_QUALITY["window"]) + 1.0)
         vf = alpha_f / (2.0 - alpha_f) + alpha_s / (2.0 - alpha_s)
+        # sigma_mismatch_mean rescales sigma_price by vf and slope_k.
         out["sigma_mismatch_mean"] = out["sigma_price"] * np.sqrt(vf) / np.sqrt(float(slope_k))
+        # z-score of slope mismatch, guarded by VOL_EPS.
         out["z"] = out["delta"] / np.maximum(
             out["sigma_mismatch_mean"],
             config.VOL_EPS,
         )
+        # zq: quantized z toward zero (step = ANGLE_SIZING_Q).
         out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
+        # fast_state/slow_state: log-distance of price vs MAs.
         out["fast_state"] = np.log(out["hlc3"]) - np.log(out["trend_ma"])
         out["slow_state"] = np.log(out["hlc3"]) - np.log(out["quality_ma"])
+        # fast_sign/slow_sign map state to {+1,0,-1} with NaN preserved.
         out["fast_sign"] = np.where(
             out["fast_state"] > 0,
             1.0,
@@ -159,11 +171,15 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
             np.where(out["slow_state"] < 0, -1.0, np.where(out["slow_state"].isna(), np.nan, 0.0)),
         )
         out["slow_sign"] = slow_sign
+        # z_dir: z aligned to slow_sign; negative implies misalignment.
         out["z_dir"] = slow_sign * out["z"]
+        # penalty captures only negative alignment; then quantized to ANGLE_SIZING_Q.
         out["penalty"] = np.maximum(0.0, -out["z_dir"])
         out["penalty_q"] = np.floor(out["penalty"] / config.ANGLE_SIZING_Q) * config.ANGLE_SIZING_Q
+        # align: [0,1] attenuation from penalty_q via tanh (higher penalty -> lower align).
         out["align"] = 1.0 - np.tanh(out["penalty_q"] / config.ANGLE_SIZING_A)
         out["align"] = np.clip(out["align"], 0.0, 1.0)
+        # NaN guard: if any prerequisite is NaN, force align=1.0 (no attenuation).
         nan_mask = out[
             [
                 "hlc3",
@@ -182,6 +198,7 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         ].isna().any(axis=1)
         out.loc[nan_mask, "align"] = 1.0
     else:
+        # When trend/quality indicators are not MA-based, alignment math is skipped.
         out["logret"] = np.nan
         out["delta"] = np.nan
         out["sigma_price"] = np.nan
@@ -195,6 +212,7 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         out["z_dir"] = np.nan
         out["penalty"] = np.nan
         out["penalty_q"] = np.nan
+        # Default align to 1.0 when angle sizing inputs are absent.
         out["align"] = 1.0
     return out
 
@@ -205,6 +223,7 @@ def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
     out = df_exec.copy()
     ex = config.EXECUTION
     ma_type = ex.get("ma_type", "sma")
+    # exec_ma is the execution-layer MA used as a trend filter in gating.
     out["exec_ma"] = moving_average(out["close"], ex["window"], ma_type)
     return out
 
@@ -213,6 +232,7 @@ def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     close = float(row_1d.get("hlc3", row_1d["close"]))
 
     if te["indicator"] == "ma":
+        # Use log-slope sign of trend_ma to decide direction.
         slope = row_1d.get("trend_log_slope", np.nan)
         if np.isnan(slope):
             return None
@@ -230,6 +250,7 @@ def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
         return None
     upper = float(upper)
     lower = float(lower)
+    # Breakout above upper => LONG; below lower => SHORT; else midline decides.
     if close >= upper:
         return "LONG"
     if close <= lower:
@@ -238,6 +259,7 @@ def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
     return "LONG" if close >= mid else "SHORT"
 
 def decide_slow_dir(row_1d: pd.Series) -> Optional[TrendDir]:
+    # Slow direction based on quality_log_slope sign.
     slope = row_1d.get("quality_log_slope", np.nan)
     if np.isnan(slope):
         return None
@@ -249,6 +271,7 @@ def decide_slow_dir(row_1d: pd.Series) -> Optional[TrendDir]:
     return None
 
 def _dir_from_sign(sign: float) -> Optional[TrendDir]:
+    # Map numeric sign to LONG/SHORT, preserving NaN as None.
     if np.isnan(sign):
         return None
     if sign > 0:
@@ -265,6 +288,7 @@ def execution_gate_mode(
     min_step_bars: int,
     require_trend_filter: bool,
 ) -> bool:
+    # Enforce minimum spacing between executions on execution timeframe.
     if exec_bar_idx - state.last_exec_bar_idx < int(min_step_bars):
         return False
     if not require_trend_filter:
@@ -276,6 +300,7 @@ def execution_gate_mode(
         return False
     exec_ma = float(exec_ma)
 
+    # Trend filter: only allow if close is above/below exec_ma in the direction of trend.
     if trend == "LONG":
         return close > exec_ma
     if trend == "SHORT":
@@ -287,6 +312,7 @@ def compute_desired_target_frac(
     align: float,
     direction_mode: DirectionMode,
 ) -> float:
+    # Convert directional sign (+1/-1/0) and alignment scalar into target fraction.
     align = float(np.clip(align, 0.0, 1.0))
     if np.isnan(fast_sign) or fast_sign == 0:
         return 0.0
@@ -302,6 +328,7 @@ def smooth_target(current: float, desired: float, max_delta: float) -> float:
     """
     Limit how much target can change per execution.
     """
+    # Clamp target change to +/- max_delta.
     delta = desired - current
     if delta > max_delta:
         delta = max_delta
@@ -310,6 +337,7 @@ def smooth_target(current: float, desired: float, max_delta: float) -> float:
     return current + delta
 
 def is_reduction(current: float, desired: float) -> bool:
+    # Reduction if absolute exposure decreases or direction flips.
     if abs(desired) < abs(current) - 1e-12:
         return True
     if current * desired < 0:
@@ -317,6 +345,7 @@ def is_reduction(current: float, desired: float) -> bool:
     return False
 
 def _side_from_frac(frac: float) -> Literal["LONG", "SHORT", "FLAT"]:
+    # Map signed fraction to side label with tiny epsilon.
     if abs(frac) < 1e-9:
         return "FLAT"
     return "LONG" if frac > 0 else "SHORT"
@@ -367,6 +396,7 @@ def decide(
 
     current = float(state.position.frac)
     # Stage B: determine market state (LONG/SHORT).
+    # raw_dir uses trend existence (MA slope or Donchian); market_state follows fast_sign.
     raw_dir = decide_trend_existence(row_1d)
     fast_sign = float(row_1d.get("fast_sign", np.nan))
     slow_sign = float(row_1d.get("slow_sign", np.nan))
@@ -375,6 +405,7 @@ def decide(
     market_state: Optional[MarketState] = fast_dir
 
     # Stage C: decide desired target.
+    # align is an attenuation factor; if disabled, force align=1.0.
     align = float(row_1d.get("align", 1.0)) if config.ANGLE_SIZING_ENABLED else 1.0
     desired = compute_desired_target_frac(fast_sign, align, config.DIRECTION_MODE)
 
@@ -386,6 +417,7 @@ def decide(
     if exec_bar_idx >= state.flip_block_until_exec_bar_idx:
         state.flip_blocked_side = None
 
+    # If flipping directly, flatten first and block re-entry for build_min_step_bars.
     if current_side != "FLAT" and desired_side != "FLAT" and current_side != desired_side:
         # Flip detected: flatten first and start cooldown before re-entry.
         state.flip_blocked_side = desired_side
@@ -440,6 +472,7 @@ def decide(
         )
 
     # Stage E: choose execution pacing and gate.
+    # Reductions allow faster cadence and skip trend filter; builds are gated by exec_ma.
     reducing = is_reduction(current, desired)
     if reducing:
         min_step_bars = int(ex["reduce_min_step_bars"])
@@ -503,6 +536,7 @@ def decide(
         )
 
     # Stage F: compute smoothed target.
+    # Smooth target caps per-step change; may produce HOLD if too small.
     target = smooth_target(current, desired, max_delta)
 
     if abs(target - current) < eps:
