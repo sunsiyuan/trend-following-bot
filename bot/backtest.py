@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -390,6 +391,7 @@ def run_backtest(
     params: BacktestParams | Dict,
     run_id: str | None = None,
     runs_jsonl_path: Path | None = None,
+    overwrite: bool = False,
 ) -> Dict:
     """
     Callable backtest entrypoint for reproducible runs.
@@ -482,6 +484,37 @@ def run_backtest(
         data_fingerprint,
     )
     run_dir = Path(config.BACKTEST_RESULT_DIR) / resolved_run_id
+    run_record_path = run_dir / "run_record.json"
+    if run_dir.exists():
+        if overwrite:
+            shutil.rmtree(run_dir)
+        else:
+            if run_record_path.exists():
+                existing_record = json.loads(run_record_path.read_text(encoding="utf-8"))
+                existing_param_hash = existing_record.get("param_hash")
+                existing_data_fingerprint = existing_record.get("data_fingerprint")
+                if existing_param_hash == param_hash and existing_data_fingerprint == data_fingerprint:
+                    log.info("Run %s exists, skipped.", resolved_run_id)
+                    return {
+                        "run_id": resolved_run_id,
+                        "start": start_label,
+                        "end": end_label,
+                        "symbols": symbols,
+                        "param_hash": param_hash,
+                        "data_fingerprint": data_fingerprint,
+                        "data_manifest_by_symbol": per_symbol_manifests,
+                        "per_symbol": [],
+                        "status": "skipped",
+                    }
+                raise RuntimeError(
+                    "Run ID conflict: existing run_record.json has "
+                    f"param_hash={existing_param_hash}, data_fingerprint={existing_data_fingerprint} "
+                    f"but requested param_hash={param_hash}, data_fingerprint={data_fingerprint}."
+                )
+            raise RuntimeError(
+                f"Run directory {run_dir} already exists without run_record.json. "
+                "Use overwrite to rerun."
+            )
     run_dir.mkdir(parents=True, exist_ok=True)
 
     for sym in symbols:
@@ -508,11 +541,55 @@ def run_backtest(
         "end": end_label,
         "param_hash": param_hash,
         "data_fingerprint": data_fingerprint,
+        "param_schema_version": params_obj.schema_version,
+        "data_schema_version": backtest_store.data_schema_version,
         "params_hashable": params_hashable,
         "data_manifest_by_symbol": per_symbol_manifests,
+        "data_manifest_by_tf": manifest_flat,
         "metrics": per_symbol_summaries,
     }
-    backtest_store.append_jsonl(runs_jsonl_path, record)
+    write_json(run_record_path, {
+        "run_id": resolved_run_id,
+        "param_hash": param_hash,
+        "data_fingerprint": data_fingerprint,
+        "param_schema_version": params_obj.schema_version,
+        "data_schema_version": backtest_store.data_schema_version,
+        "params_hashable": params_hashable,
+        "data_manifest_by_tf": manifest_flat,
+        "data_manifest_by_symbol": per_symbol_manifests,
+    })
+
+    existing_runs = backtest_store.read_jsonl(runs_jsonl_path)
+    existing_same = [
+        r for r in existing_runs
+        if r.get("run_id") == resolved_run_id
+    ]
+    if existing_same:
+        fingerprints_match = all(
+            r.get("param_hash") == param_hash and r.get("data_fingerprint") == data_fingerprint
+            for r in existing_same
+        )
+        if not fingerprints_match:
+            if not overwrite:
+                raise RuntimeError(
+                    "runs.jsonl conflict: existing run_id has mismatched fingerprints."
+                )
+            existing_runs = [r for r in existing_runs if r.get("run_id") != resolved_run_id]
+        else:
+            log.info("runs.jsonl already contains run_id %s, skipping append.", resolved_run_id)
+            return {
+                "run_id": resolved_run_id,
+                "start": start_label,
+                "end": end_label,
+                "symbols": symbols,
+                "param_hash": param_hash,
+                "data_fingerprint": data_fingerprint,
+                "data_manifest_by_symbol": per_symbol_manifests,
+                "per_symbol": per_symbol_summaries,
+                "status": "completed",
+            }
+
+    backtest_store.write_jsonl(runs_jsonl_path, [*existing_runs, record])
 
     return {
         "run_id": resolved_run_id,
@@ -523,6 +600,7 @@ def run_backtest(
         "data_fingerprint": data_fingerprint,
         "data_manifest_by_symbol": per_symbol_manifests,
         "per_symbol": per_symbol_summaries,
+        "status": "completed",
     }
 
 
@@ -903,6 +981,7 @@ def main() -> None:
     ap.add_argument("--end", required=True, help="YYYY-MM-DD (UTC)")
     ap.add_argument("--symbols", default=",".join(config.SYMBOLS), help="Comma-separated symbols (coins) e.g. BTC,ETH,SOL")
     ap.add_argument("--run_id", default="", help="Optional run id; default is deterministic")
+    ap.add_argument("--overwrite", action="store_true", help="Overwrite existing run_id outputs")
     args = ap.parse_args()
 
     params = build_params_from_config()
@@ -913,7 +992,11 @@ def main() -> None:
         args.end,
         params,
         run_id=args.run_id.strip() or None,
+        overwrite=args.overwrite,
     )
+    if run_result.get("status") == "skipped":
+        log.info("Run %s exists, skipped.", run_result["run_id"])
+        return
     run_id = run_result["run_id"]
     run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id
 

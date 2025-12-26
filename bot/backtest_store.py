@@ -157,3 +157,26 @@ def append_jsonl(path: Path, record: Dict[str, Any]) -> None:
     line = stable_json(record)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(line + "\n")
+
+
+def read_jsonl(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    records: List[Dict[str, Any]] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return records
+
+
+def write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        for record in records:
+            handle.write(stable_json(record) + "\n")
