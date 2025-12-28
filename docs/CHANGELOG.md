@@ -1,5 +1,9 @@
 # Documentation Versions
 
+## v6 - Drawdown scoring soft/hard guards
+- Split drawdown guardrails into `mdd_pass_guard=-0.30` and `mdd_hard_guard=-0.60` with linear decay in between.
+- Documented the updated drawdown scoring and guard semantics.
+
 ## v5 - Rank final always computed
 - Ensure rank scoring always computes `final` from the formula, independent of `mdd_pass`.
 - Emit `base` (`E/UI_eff`) and `mdd_score` for rank diagnostics.
