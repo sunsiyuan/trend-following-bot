@@ -133,19 +133,40 @@ def _split_csv_arg(value: str) -> List[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _normalize_prefix_list(value: Any) -> List[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return _split_csv_arg(value)
+    if isinstance(value, (list, tuple)):
+        normalized: List[str] = []
+        for item in value:
+            if item is None:
+                continue
+            if not isinstance(item, str):
+                item = str(item)
+            item = item.strip()
+            if item:
+                normalized.append(item)
+        return normalized
+    return []
+
+
 def _load_spec(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _collect_filters(args: argparse.Namespace, spec: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     if spec is not None:
-        return spec
+        filters = dict(spec)
+        filters["param_hash_prefix"] = _normalize_prefix_list(spec.get("param_hash_prefix"))
+        return filters
     return {
         "symbols": args.symbols,
         "requested_start": args.requested_start,
         "requested_end": args.requested_end,
         "strategy_version": args.strategy_version,
-        "param_hash_prefix": args.param_hash_prefix,
+        "param_hash_prefix": _normalize_prefix_list(args.param_hash_prefix),
         "data_fingerprint_prefix": args.data_fingerprint_prefix,
         "run_ids": args.run_ids,
         "limit": args.limit,
@@ -157,7 +178,7 @@ def _filter_runs(records: List[RunRecord], filters: Dict[str, Any]) -> List[RunR
     requested_start = filters.get("requested_start")
     requested_end = filters.get("requested_end")
     strategy_version = filters.get("strategy_version")
-    param_hash_prefix = filters.get("param_hash_prefix")
+    param_hash_prefix = filters.get("param_hash_prefix") or []
     data_fingerprint_prefix = filters.get("data_fingerprint_prefix")
     run_ids = set(filters.get("run_ids") or [])
 
@@ -183,7 +204,9 @@ def _filter_runs(records: List[RunRecord], filters: Dict[str, Any]) -> List[RunR
             continue
         if param_hash_prefix:
             param_hash = record.get("param_hash", "")
-            if not isinstance(param_hash, str) or not param_hash.startswith(param_hash_prefix):
+            if not isinstance(param_hash, str) or not any(
+                param_hash.startswith(prefix) for prefix in param_hash_prefix
+            ):
                 continue
         if data_fingerprint_prefix:
             fingerprint = record.get("data_fingerprint", "")
@@ -664,7 +687,7 @@ def main() -> None:
         args.requested_start = args.requested_start.strip() or None
         args.requested_end = args.requested_end.strip() or None
         args.strategy_version = args.strategy_version.strip() or None
-        args.param_hash_prefix = args.param_hash_prefix.strip() or None
+        args.param_hash_prefix = _normalize_prefix_list(args.param_hash_prefix)
         args.data_fingerprint_prefix = args.data_fingerprint_prefix.strip() or None
 
     filters = _collect_filters(args, spec)

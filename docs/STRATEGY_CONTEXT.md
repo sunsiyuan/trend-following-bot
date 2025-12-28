@@ -42,6 +42,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **评分逻辑**：`final` 由 `E/UI` 与 `mdd_score` 组合，`mdd_pass` 仅用 `MDD > -0.30` 判定；`mdd_score` 在 `-0.30` 以内不惩罚、`-0.60` 触底为 0，中间线性衰减。详见 `docs/KEY_METRICS.md`。  
 - **评分诊断字段**：排名结果额外输出 `base=E/UI_eff` 与 `mdd_score`，用于区分收益比与回撤贡献。  
 - **排名输出**：排名结果输出到 `data/backtest_rank/{rank_id}/rank_results.json` 与 `rank_results.csv`（CSV 为默认结果表格）。  
+- **过滤器语义**：`filters.param_hash_prefix` 支持逗号分隔字符串或列表输入，内部归一为 list；命中任一前缀即通过（OR）。  
 
 **English**
 
@@ -51,6 +52,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **Scoring**: `final` combines `E/UI` with `mdd_score`; `mdd_pass` only uses `MDD > -0.30`, while `mdd_score` stays at 1 up to `-0.30`, decays linearly, and bottoms at 0 by `-0.60`. See `docs/KEY_METRICS.md` for details.  
 - **Diagnostics**: ranking results also emit `base=E/UI_eff` and `mdd_score` to distinguish return vs. drawdown contributions.  
 - **Ranking outputs**: results are written to `data/backtest_rank/{rank_id}/rank_results.json` and `rank_results.csv` (CSV is the default table output).  
+- **Filter semantics**: `filters.param_hash_prefix` accepts CSV strings or lists, is normalized to a list, and matches if any prefix hits (OR).  
 
 ## 数据与时间粒度 / Data & Timeframe
 策略计算使用的字段包括：close（所有路径），high/low（HLC3与Donchian路径），其它字段如open/volume/trades未在信号计算中使用。  
