@@ -39,7 +39,8 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **指标契约**：对比/排名层使用的核心公式与字段定义统一收敛到 `docs/KEY_METRICS.md`。  
 - **rank 输出目录**：排名结果落盘目录使用 `data/backtest_rank/{YYYYMMDDTHHMMSSZ}__{rank_id}/...`，其中 `rank_id` 仍为逻辑 hash 标识。  
 - **Rolling 口径**：固定 `window_days=180`、`step_days=60`，从 `equity_by_day.csv` 的首日对齐滚动；窗口切片遵循 start inclusive / end exclusive。  
-- **评分逻辑**：`final` 由 `E/UI` 与 `mdd_score` 组合，`mdd_pass` 以 `MDD > -0.30` 判定；详见 `docs/KEY_METRICS.md`。  
+- **评分逻辑**：`final` 由 `E/UI` 与 `mdd_score` 组合，`mdd_pass` 以 `MDD > -0.30` 判定；`mdd_pass` 仅作为护栏，`final` 始终按公式计算。详见 `docs/KEY_METRICS.md`。  
+- **评分诊断字段**：排名结果额外输出 `base=E/UI_eff` 与 `mdd_score`，用于区分收益比与回撤贡献。  
 - **排名输出**：排名结果输出到 `data/backtest_rank/{rank_id}/rank_results.json` 与 `rank_results.csv`（CSV 为默认结果表格）。  
 
 **English**
@@ -47,7 +48,8 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **Metric contract**: ranking/compare formulas and fields are centralized in `docs/KEY_METRICS.md`.  
 - **Rank output directory**: ranking outputs are stored under `data/backtest_rank/{YYYYMMDDTHHMMSSZ}__{rank_id}/...`, while `rank_id` remains the logical hash identifier.  
 - **Rolling semantics**: fixed `window_days=180`, `step_days=60`, aligned from the first day in `equity_by_day.csv`; windows use start-inclusive/end-exclusive slicing.  
-- **Scoring**: `final` combines `E/UI` with `mdd_score`, and `mdd_pass` uses `MDD > -0.30`; see `docs/KEY_METRICS.md` for details.  
+- **Scoring**: `final` combines `E/UI` with `mdd_score`, and `mdd_pass` uses `MDD > -0.30`; `mdd_pass` is guardrail-only and `final` is always computed via the formula. See `docs/KEY_METRICS.md` for details.  
+- **Diagnostics**: ranking results also emit `base=E/UI_eff` and `mdd_score` to distinguish return vs. drawdown contributions.  
 - **Ranking outputs**: results are written to `data/backtest_rank/{rank_id}/rank_results.json` and `rank_results.csv` (CSV is the default table output).  
 
 ## 数据与时间粒度 / Data & Timeframe

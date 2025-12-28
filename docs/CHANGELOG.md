@@ -1,5 +1,10 @@
 # Documentation Versions
 
+## v5 - Rank final always computed
+- Ensure rank scoring always computes `final` from the formula, independent of `mdd_pass`.
+- Emit `base` (`E/UI_eff`) and `mdd_score` for rank diagnostics.
+- Document the evaluation-layer scoring guardrail behavior and diagnostics fields.
+
 ## v4 - rank run implement
 - Added `bot/rank_runs.py` for ranking backtest runs, plus key metric contract documentation.
 - Documented ranking outputs and evaluation-layer contract updates.

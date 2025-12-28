@@ -2,11 +2,11 @@
 
 **中文**
 
-本仓库核心代码集中在 `bot/` 目录，包含回测入口、策略逻辑、数据获取与指标计算等模块。本文仅基于仓库内真实代码梳理“项目结构与策略文件关系”，并标注每个关键结论的证据位置（文件路径 + 行号范围）。策略/回测均通过同一套 `strategy.decide` 逻辑执行，回测入口位于 `bot/backtest.py`，并输出结果到 `data/backtest_result/...`；新增排名脚本 `bot/rank_runs.py` 读取 `runs.jsonl` 与 run_dir 产出 `data/backtest_rank/{YYYYMMDDTHHMMSSZ}__{rank_id}/...`。证据：`bot/backtest.py:L1-L13, L345-L723` 与 `bot/rank_runs.py:L1-L718`。
+本仓库核心代码集中在 `bot/` 目录，包含回测入口、策略逻辑、数据获取与指标计算等模块。本文仅基于仓库内真实代码梳理“项目结构与策略文件关系”，并标注每个关键结论的证据位置（文件路径 + 行号范围）。策略/回测均通过同一套 `strategy.decide` 逻辑执行，回测入口位于 `bot/backtest.py`，并输出结果到 `data/backtest_result/...`；新增排名脚本 `bot/rank_runs.py` 读取 `runs.jsonl` 与 run_dir 产出 `data/backtest_rank/{YYYYMMDDTHHMMSSZ}__{rank_id}/...`，评分始终按 `docs/KEY_METRICS.md` 公式计算，`mdd_pass` 为独立护栏字段并额外输出 `base/mdd_score` 以便诊断。证据：`bot/backtest.py:L1-L13, L345-L723` 与 `bot/rank_runs.py:L1-L718`。
 
 **English**
 
-The core code lives in `bot/` and includes the backtest entry, strategy logic, data access, and metrics. This document maps structure and strategy file relationships based strictly on the repository’s actual code, with evidence for each key statement (path + line range). Both backtest and live flow call the shared `strategy.decide` logic; the backtest entry is `bot/backtest.py` and outputs results under `data/backtest_result/...`, while the ranking script `bot/rank_runs.py` reads `runs.jsonl` + run_dir outputs and emits `data/backtest_rank/{YYYYMMDDTHHMMSSZ}__{rank_id}/...`. Evidence: `bot/backtest.py:L1-L13, L345-L723` and `bot/rank_runs.py:L1-L718`.
+The core code lives in `bot/` and includes the backtest entry, strategy logic, data access, and metrics. This document maps structure and strategy file relationships based strictly on the repository’s actual code, with evidence for each key statement (path + line range). Both backtest and live flow call the shared `strategy.decide` logic; the backtest entry is `bot/backtest.py` and outputs results under `data/backtest_result/...`, while the ranking script `bot/rank_runs.py` reads `runs.jsonl` + run_dir outputs and emits `data/backtest_rank/{YYYYMMDDTHHMMSSZ}__{rank_id}/...`, always computing the score per `docs/KEY_METRICS.md` with `mdd_pass` as a separate guardrail field and extra `base/mdd_score` diagnostics. Evidence: `bot/backtest.py:L1-L13, L345-L723` and `bot/rank_runs.py:L1-L718`.
 
 # Repo Tree / 仓库树
 
