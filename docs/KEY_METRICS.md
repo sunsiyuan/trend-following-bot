@@ -8,12 +8,16 @@ This document defines the metric contract for ranking/compare layer, based stric
 **Scoring**
 
 - `ui_floor = 0.05`
-- `mdd_guard = -0.30`
+- `mdd_pass_guard = -0.30`
+- `mdd_hard_guard = -0.60`
 - `gamma = 0.5`
 - `UI_eff = max(UI, ui_floor)`
 - `E = R_total - R_bh_total`
-- `mdd_pass = (MDD > mdd_guard)` （注意：`MDD <= -0.30` 为 False）
-- `mdd_score = clip(1 - abs(MDD) / abs(mdd_guard), 0, 1)`
+- `mdd_pass = (MDD > mdd_pass_guard)` （注意：`MDD <= -0.30` 为 False）
+- `dd = abs(MDD)`
+- `mdd_score = 1` if `dd <= 0.30`
+- `mdd_score = 0` if `dd >= 0.60`
+- `mdd_score = 1 - (dd - 0.30) / (0.60 - 0.30)` otherwise
 - `final = (E / UI_eff) * (mdd_score ** gamma)`
 
 **Rolling**

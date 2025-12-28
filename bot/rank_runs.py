@@ -22,7 +22,8 @@ ROLLING_WINDOW_DAYS = 180
 ROLLING_STEP_DAYS = 60
 
 UI_FLOOR = 0.05
-MDD_GUARD = -0.30
+MDD_PASS_GUARD = -0.30
+MDD_HARD_GUARD = -0.60
 GAMMA = 0.5
 
 PRIMARY_COLS = [
@@ -261,11 +262,24 @@ def _compute_score(
 ) -> Tuple[float, float, bool, float, float]:
     e_value = total_ret - bh_ret
     ui_eff = max(ui, UI_FLOOR)
-    mdd_pass = mdd > MDD_GUARD
-    mdd_score = max(0.0, min(1.0, 1.0 - abs(mdd) / abs(MDD_GUARD)))
+    mdd_pass = mdd > MDD_PASS_GUARD
+    mdd_score = compute_mdd_score(mdd, MDD_PASS_GUARD, MDD_HARD_GUARD)
     base = e_value / ui_eff
     final = base * (mdd_score ** GAMMA)
     return final, e_value, mdd_pass, base, mdd_score
+
+
+def compute_mdd_score(mdd: float, mdd_pass_guard: float, mdd_hard_guard: float) -> float:
+    dd = abs(mdd)
+    pass_guard = abs(mdd_pass_guard)
+    hard_guard = abs(mdd_hard_guard)
+    if hard_guard <= pass_guard:
+        raise ValueError("mdd_hard_guard must be more negative than mdd_pass_guard.")
+    if dd <= pass_guard:
+        return 1.0
+    if dd >= hard_guard:
+        return 0.0
+    return 1.0 - (dd - pass_guard) / (hard_guard - pass_guard)
 
 
 def _rolling_windows(
@@ -662,8 +676,11 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if spec is not None:
+        spec_output = dict(spec)
+        spec_output["mdd_pass_guard"] = MDD_PASS_GUARD
+        spec_output["mdd_hard_guard"] = MDD_HARD_GUARD
         (output_dir / "rank_spec.json").write_text(
-            json.dumps(spec, indent=2, ensure_ascii=False),
+            json.dumps(spec_output, indent=2, ensure_ascii=False),
             encoding="utf-8",
         )
 
@@ -749,6 +766,8 @@ def main() -> None:
         "created_at_utc": created_at_utc,
         "generated_at": datetime.utcnow().isoformat() + "Z",
         "filters": filters,
+        "mdd_pass_guard": MDD_PASS_GUARD,
+        "mdd_hard_guard": MDD_HARD_GUARD,
         "run_count": len(ranked),
         "results": ranked,
     }
