@@ -36,8 +36,10 @@ PRIMARY_COLS = [
     "strategy_version",
     "final",
     "E",
+    "base",
     "ui",
     "mdd",
+    "mdd_score",
     "mdd_pass",
     "R_total",
     "R_bh_total",
@@ -251,13 +253,19 @@ def _compute_full_period_metrics(
     return total_ret, bh_ret, mdd, ui
 
 
-def _compute_score(total_ret: float, bh_ret: float, mdd: float, ui: float) -> Tuple[float, float, bool]:
+def _compute_score(
+    total_ret: float,
+    bh_ret: float,
+    mdd: float,
+    ui: float,
+) -> Tuple[float, float, bool, float, float]:
     e_value = total_ret - bh_ret
     ui_eff = max(ui, UI_FLOOR)
     mdd_pass = mdd > MDD_GUARD
     mdd_score = max(0.0, min(1.0, 1.0 - abs(mdd) / abs(MDD_GUARD)))
-    final = (e_value / ui_eff) * (mdd_score ** GAMMA)
-    return final, e_value, mdd_pass
+    base = e_value / ui_eff
+    final = base * (mdd_score ** GAMMA)
+    return final, e_value, mdd_pass, base, mdd_score
 
 
 def _rolling_windows(
@@ -329,7 +337,7 @@ def _rolling_windows(
                 total_ret = metrics.total_return_from_equity(equity)
                 bh_ret = metrics.total_return_from_equity(bh_equity)
                 mdd, ui = metrics.mdd_and_ulcer_index(equity)
-                final, e_value, _ = _compute_score(total_ret, bh_ret, mdd, ui)
+                final, e_value, _, _, _ = _compute_score(total_ret, bh_ret, mdd, ui)
                 final_values.append(final)
                 e_values.append(e_value)
         window_start = window_start + timedelta(days=ROLLING_STEP_DAYS)
@@ -684,8 +692,10 @@ def main() -> None:
         final = None
         e_value = None
         mdd_pass = None
+        base = None
+        mdd_score = None
         if total_ret is not None and bh_ret is not None and mdd is not None and ui is not None:
-            final, e_value, mdd_pass = _compute_score(total_ret, bh_ret, mdd, ui)
+            final, e_value, mdd_pass, base, mdd_score = _compute_score(total_ret, bh_ret, mdd, ui)
 
         rolling_metrics, rolling_invalids = _rolling_windows(df_equity, df_bh)
         invalid_reasons.extend(rolling_invalids)
@@ -716,6 +726,8 @@ def main() -> None:
             "record_line_no": run.line_no,
             "final": final,
             "E": e_value,
+            "base": base,
+            "mdd_score": mdd_score,
             "mdd_pass": mdd_pass,
             "mdd": mdd,
             "ui": ui,
