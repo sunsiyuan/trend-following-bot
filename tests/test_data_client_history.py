@@ -31,6 +31,7 @@ def test_btc_1d_absolute_earliest_skips_download(monkeypatch, caplog):
     earliest_fact = config.HYPERLIQUID_EARLIEST_KLINES_TS_MS[symbol]
     requested_start = earliest_fact - interval_ms
     requested_end = earliest_fact + interval_ms
+    monkeypatch.setattr(data_client, "now_ms", lambda: requested_end)
 
     df = _make_df([earliest_fact], interval_ms)
 
@@ -62,6 +63,7 @@ def test_btc_1d_absolute_earliest_clamps_and_downloads(monkeypatch, caplog):
     earliest_fact = config.HYPERLIQUID_EARLIEST_KLINES_TS_MS[symbol]
     requested_start = earliest_fact - interval_ms
     requested_end = earliest_fact + interval_ms
+    monkeypatch.setattr(data_client, "now_ms", lambda: requested_end)
 
     empty_df = pd.DataFrame(columns=["open_ts","close_ts","open","high","low","close","volume","trades"]).set_index("close_ts")
     df = _make_df([earliest_fact], interval_ms)
@@ -97,6 +99,7 @@ def test_4h_api_window_skip_download(monkeypatch, caplog):
     caplog.set_level("INFO")
     interval_ms = data_client.interval_to_ms(interval)
     requested_end = 2_000_000_000_000
+    monkeypatch.setattr(data_client, "now_ms", lambda: requested_end)
     api_window_start = data_client.compute_api_window_start_ts_ms(interval, requested_end)
     requested_start = api_window_start - interval_ms
 
@@ -127,6 +130,7 @@ def test_4h_api_window_clamps_and_downloads(monkeypatch, caplog):
     caplog.set_level("INFO")
     interval_ms = data_client.interval_to_ms(interval)
     requested_end = 2_000_000_000_000
+    monkeypatch.setattr(data_client, "now_ms", lambda: requested_end)
     api_window_start = data_client.compute_api_window_start_ts_ms(interval, requested_end)
     requested_start = api_window_start - interval_ms
 
@@ -164,6 +168,7 @@ def test_normal_request_no_boundary_warning(monkeypatch, caplog):
     caplog.set_level("INFO")
     interval_ms = data_client.interval_to_ms(interval)
     requested_end = 2_000_000_000_000
+    monkeypatch.setattr(data_client, "now_ms", lambda: requested_end)
     api_window_start = data_client.compute_api_window_start_ts_ms(interval, requested_end)
     requested_start = api_window_start + interval_ms
 
@@ -191,3 +196,34 @@ def test_normal_request_no_boundary_warning(monkeypatch, caplog):
     assert download_calls[0][0][2] == requested_start
     warning_events = [record.msg for record in caplog.records if record.levelname == "WARNING"]
     assert warning_events == []
+
+
+def test_request_range_before_hl_window_skips_download(monkeypatch, caplog):
+    symbol = "BTC"
+    interval = "4h"
+    caplog.set_level("INFO")
+    interval_ms = data_client.interval_to_ms(interval)
+    fixed_now = 2_000_000_000_000
+    monkeypatch.setattr(data_client, "now_ms", lambda: fixed_now)
+    api_window_start = data_client.compute_api_window_start_ts_ms(interval, fixed_now)
+    requested_end = api_window_start - interval_ms
+    requested_start = requested_end - interval_ms
+
+    empty_df = pd.DataFrame(columns=["open_ts","close_ts","open","high","low","close","volume","trades"]).set_index("close_ts")
+
+    monkeypatch.setattr(data_client, "get_cache_earliest_ts_ms", lambda s, i: None)
+    monkeypatch.setattr(data_client, "load_klines_df_from_cache", lambda s, i: empty_df)
+
+    download_calls = []
+
+    def _download(*args, **kwargs):
+        download_calls.append((args, kwargs))
+
+    monkeypatch.setattr(data_client, "download_history_to_cache", _download)
+
+    result = data_client.ensure_market_data(symbol, interval, requested_start, requested_end)
+
+    assert download_calls == []
+    assert result.empty
+    warning_events = [record.msg for record in caplog.records if record.levelname == "WARNING"]
+    assert any(msg.get("event") == "REQUEST_RANGE_BEFORE_HL_WINDOW" for msg in warning_events)

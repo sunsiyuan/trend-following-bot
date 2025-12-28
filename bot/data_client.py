@@ -70,17 +70,30 @@ def now_ms() -> int:
 # Hyperliquid data constraints
 # -----------------------------
 
+# NOTE: candleSnapshot "most recent 5000 candles" is anchored to server now;
+# endTime cannot extend historical availability.
+
 def get_earliest_possible_ts_ms(symbol: str) -> Optional[int]:
     return config.HYPERLIQUID_EARLIEST_KLINES_TS_MS.get(symbol)
+
+def compute_api_window_anchor_ts_ms(timeframe: str, now_ts_ms: Optional[int] = None) -> int:
+    timeframe_ms = interval_to_ms(timeframe)
+    aligned_now_ms = (int(now_ts_ms) if now_ts_ms is not None else now_ms()) // timeframe_ms * timeframe_ms
+    return int(aligned_now_ms)
 
 def compute_api_window_start_ts_ms(
     timeframe: str,
     end_ts_ms: Optional[int],
     limit: int = config.HYPERLIQUID_KLINE_MAX_LIMIT,
+    now_ts_ms: Optional[int] = None,
 ) -> int:
-    end_ms = end_ts_ms if end_ts_ms is not None else now_ms()
+    """
+    Compute the earliest available timestamp for the "most recent" API window.
+    Hyperliquid anchors this window to server now; end_ts_ms is ignored.
+    """
     timeframe_ms = interval_to_ms(timeframe)
-    return int(end_ms - limit * timeframe_ms)
+    anchor_ts_ms = compute_api_window_anchor_ts_ms(timeframe, now_ts_ms=now_ts_ms)
+    return int(anchor_ts_ms - limit * timeframe_ms)
 
 def get_cache_earliest_ts_ms(symbol: str, interval: str) -> Optional[int]:
     # Scan cached jsonl for minimum open timestamp.
@@ -307,14 +320,21 @@ def load_klines_df_from_cache(symbol: str, interval: str) -> pd.DataFrame:
 
 def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Optional[int]) -> pd.DataFrame:
     requested_start_ts_ms = int(start_ms)
-    requested_end_ts_ms = int(end_ms) if end_ms is not None else now_ms()
+    now_ts_ms = now_ms()
+    requested_end_ts_ms = min(int(end_ms) if end_ms is not None else now_ts_ms, now_ts_ms)
 
     cache_earliest_ts_ms = get_cache_earliest_ts_ms(symbol, interval)
     earliest_fact_ts_ms = get_earliest_possible_ts_ms(symbol)
-    api_window_start_ts_ms = compute_api_window_start_ts_ms(interval, requested_end_ts_ms)
+    api_window_anchor_ts_ms = compute_api_window_anchor_ts_ms(interval, now_ts_ms=now_ts_ms)
+    api_window_start_ts_ms = compute_api_window_start_ts_ms(
+        interval,
+        requested_end_ts_ms,
+        now_ts_ms=now_ts_ms,
+    )
 
     effective_start_ts_ms = requested_start_ts_ms
     skip_download = False
+    range_before_api_window = requested_end_ts_ms < api_window_start_ts_ms
 
     # Clamp requests to earliest available data and API window limits.
     if interval == "1d" and earliest_fact_ts_ms is not None and requested_start_ts_ms < earliest_fact_ts_ms:
@@ -345,7 +365,23 @@ def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Option
                 "action": "SKIP_DOWNLOAD_ABSOLUTE_EARLIEST_REACHED",
             })
 
-    if requested_start_ts_ms < api_window_start_ts_ms:
+    if range_before_api_window:
+        skip_download = True
+        log.warning({
+            "event": "REQUEST_RANGE_BEFORE_HL_WINDOW",
+            "level": "WARNING",
+            "symbol": symbol,
+            "timeframe": interval,
+            "requested_start_ts_ms": requested_start_ts_ms,
+            "requested_end_ts_ms": requested_end_ts_ms,
+            "api_window_start_ts_ms": api_window_start_ts_ms,
+            "api_window_anchor_ts_ms": api_window_anchor_ts_ms,
+            "cache_earliest_ts_ms": cache_earliest_ts_ms,
+            "limit": config.HYPERLIQUID_KLINE_MAX_LIMIT,
+            "action": "SKIP_DOWNLOAD_RANGE_BEFORE_HL_WINDOW",
+        })
+
+    if requested_start_ts_ms < api_window_start_ts_ms and not range_before_api_window:
         effective_start_ts_ms = max(effective_start_ts_ms, api_window_start_ts_ms)
         log.warning({
             "event": "REQUEST_BEFORE_API_WINDOW",
@@ -355,6 +391,7 @@ def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Option
             "requested_start_ts_ms": requested_start_ts_ms,
             "requested_end_ts_ms": requested_end_ts_ms,
             "api_window_start_ts_ms": api_window_start_ts_ms,
+            "api_window_anchor_ts_ms": api_window_anchor_ts_ms,
             "cache_earliest_ts_ms": cache_earliest_ts_ms,
             "effective_start_ts_ms": effective_start_ts_ms,
             "limit": config.HYPERLIQUID_KLINE_MAX_LIMIT,
@@ -369,6 +406,7 @@ def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Option
                 "requested_start_ts_ms": requested_start_ts_ms,
                 "requested_end_ts_ms": requested_end_ts_ms,
                 "api_window_start_ts_ms": api_window_start_ts_ms,
+                "api_window_anchor_ts_ms": api_window_anchor_ts_ms,
                 "cache_earliest_ts_ms": cache_earliest_ts_ms,
                 "effective_start_ts_ms": effective_start_ts_ms,
                 "limit": config.HYPERLIQUID_KLINE_MAX_LIMIT,
