@@ -323,6 +323,26 @@ def ensure_market_data(symbol: str, interval: str, start_ms: int, end_ms: Option
     now_ts_ms = now_ms()
     requested_end_ts_ms = min(int(end_ms) if end_ms is not None else now_ts_ms, now_ts_ms)
 
+    if symbol == "BTCTEST":
+        df = load_klines_df_from_cache(symbol, interval)
+        if df.empty:
+            raise FileNotFoundError(
+                f"BTCTEST cache missing for interval={interval} in {config.MARKET_DATA_DIR}."
+            )
+        min_open = int(df["open_ts"].min())
+        max_close = int(df.index.max())
+        end_bound_ts_ms = max(requested_end_ts_ms - 1, requested_start_ts_ms)
+        if min_open > requested_start_ts_ms or max_close < end_bound_ts_ms:
+            raise ValueError(
+                "BTCTEST cache coverage insufficient: "
+                f"requested_start_ts_ms={requested_start_ts_ms}, "
+                f"requested_end_ts_ms={requested_end_ts_ms}, "
+                f"end_bound_ts_ms={end_bound_ts_ms}, "
+                f"cache_min_open_ts_ms={min_open}, "
+                f"cache_max_close_ts_ms={max_close}."
+            )
+        return df.loc[(df.index >= requested_start_ts_ms) & (df.index <= requested_end_ts_ms)].copy()
+
     cache_earliest_ts_ms = get_cache_earliest_ts_ms(symbol, interval)
     earliest_fact_ts_ms = get_earliest_possible_ts_ms(symbol)
     api_window_anchor_ts_ms = compute_api_window_anchor_ts_ms(interval, now_ts_ms=now_ts_ms)

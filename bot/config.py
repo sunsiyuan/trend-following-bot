@@ -176,6 +176,11 @@ def vol_window_from_fast_window(w_fast: int) -> int:
 # - 所以：你可以先 long_only 把暴露问题调顺，再切 both_side 验证稳健性
 DIRECTION_MODE: DirectionMode = "both_side"
 
+# 目标仓位缩放系数（按方向符号）
+# - 多头保持 1.0，空头更保守（整体打折，而非只做上限裁剪）
+MAX_LONG_FRAC: float = 1.0
+MAX_SHORT_FRAC: float = 0.25
+
 # -----------------------------
 # Backtest settings
 # -----------------------------

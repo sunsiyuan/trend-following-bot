@@ -26,7 +26,7 @@ import pandas as pd
 from bot import config
 from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
-STRATEGY_VERSION = "v1"
+STRATEGY_VERSION = "v2"
 # NOTE: Any structural strategy change (components added/removed, signal definitions,
 # or position-sizing logic changes) must bump STRATEGY_VERSION.
 
@@ -316,16 +316,26 @@ def compute_desired_target_frac(
     align: float,
     direction_mode: DirectionMode,
 ) -> float:
+    def apply_pos_scale(desired_raw: float, max_long_frac: float, max_short_frac: float) -> float:
+        if desired_raw > 0:
+            return desired_raw * max_long_frac
+        if desired_raw < 0:
+            return desired_raw * max_short_frac
+        return 0.0
+
     # Convert directional sign (+1/-1/0) and alignment scalar into target fraction.
     align = float(np.clip(align, 0.0, 1.0))
     if np.isnan(fast_sign) or fast_sign == 0:
         return 0.0
     if direction_mode == "both_side":
-        return float(fast_sign) * align
+        desired_raw = float(fast_sign) * align
+        return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
     if direction_mode == "long_only":
-        return align if fast_sign > 0 else 0.0
+        desired_raw = align if fast_sign > 0 else 0.0
+        return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
     if direction_mode == "short_only":
-        return -align if fast_sign < 0 else 0.0
+        desired_raw = -align if fast_sign < 0 else 0.0
+        return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
     return 0.0
 
 def smooth_target(current: float, desired: float, max_delta: float) -> float:

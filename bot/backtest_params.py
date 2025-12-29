@@ -43,6 +43,8 @@ class BacktestParams:
     trend_quality: Dict[str, Any] = field(default_factory=dict)
     execution: Dict[str, Any] = field(default_factory=dict)
     direction_mode: str = "long_only"
+    max_long_frac: float = 1.0
+    max_short_frac: float = 0.25
     starting_cash_usdc_per_symbol: float = 0.0
     taker_fee_bps: float = 0.0
 
@@ -55,6 +57,8 @@ class BacktestParams:
             "trend_quality": self.trend_quality,
             "execution": self.execution,
             "direction_mode": self.direction_mode,
+            "max_long_frac": self.max_long_frac,
+            "max_short_frac": self.max_short_frac,
             "starting_cash_usdc_per_symbol": self.starting_cash_usdc_per_symbol,
             "taker_fee_bps": self.taker_fee_bps,
         }
@@ -71,6 +75,8 @@ class BacktestParams:
             trend_quality=dict(payload.get("trend_quality", {})),
             execution=dict(payload.get("execution", {})),
             direction_mode=str(payload.get("direction_mode", "long_only")),
+            max_long_frac=float(payload.get("max_long_frac", 1.0)),
+            max_short_frac=float(payload.get("max_short_frac", 0.25)),
             starting_cash_usdc_per_symbol=float(payload.get("starting_cash_usdc_per_symbol", 0.0)),
             taker_fee_bps=float(payload.get("taker_fee_bps", 0.0)),
         )
