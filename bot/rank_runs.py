@@ -229,22 +229,6 @@ def _load_summary(path: Path) -> Dict[str, Any]:
         return {}
 
 
-def _read_quarterly_stats(path: Path) -> Optional[Dict[str, Any]]:
-    if not path.exists():
-        return None
-    df = pd.read_csv(path)
-    if df.empty or "period" not in df.columns:
-        return None
-    df = df[df["period"].astype(str).str.startswith("All ")]
-    if df.empty:
-        return None
-    if "strategy" in df.columns:
-        strategy_rows = df[df["strategy"] != "buy_hold"]
-        if not strategy_rows.empty:
-            return strategy_rows.iloc[0].to_dict()
-    return df.iloc[0].to_dict()
-
-
 def _load_equity_frames(run_dir: Path) -> Tuple[pd.DataFrame, pd.DataFrame]:
     equity_path = run_dir / "equity_by_day.csv"
     bh_path = run_dir / "equity_by_day_bh.csv"
@@ -535,7 +519,6 @@ def _compute_style_metrics(
 
 def _compute_profile_metrics(
     summary: Dict[str, Any],
-    quarterly_row: Optional[Dict[str, Any]],
     df_equity: pd.DataFrame,
     trades_path: Path,
 ) -> Tuple[Dict[str, Optional[float]], List[str]]:
@@ -557,12 +540,6 @@ def _compute_profile_metrics(
         "fees_paid": None,
         "turnover_proxy": None,
     }
-
-    if quarterly_row:
-        for key in fields.keys():
-            if key in quarterly_row:
-                fields[key] = _safe_float(quarterly_row.get(key))
-        return fields, invalid_reasons
 
     if df_equity.empty:
         invalid_reasons.append("missing_equity_series_for_profile")
@@ -721,7 +698,6 @@ def main() -> None:
         invalid_reasons: List[str] = []
 
         summary = _load_summary(run_dir / "summary.json")
-        quarterly_row = _read_quarterly_stats(run_dir / "quarterly_stats.csv")
         df_equity, df_bh = _load_equity_frames(run_dir)
         trades_path = run_dir / "trades.jsonl"
 
@@ -748,7 +724,6 @@ def main() -> None:
 
         profile_metrics, profile_invalids = _compute_profile_metrics(
             summary,
-            quarterly_row,
             df_equity,
             trades_path,
         )

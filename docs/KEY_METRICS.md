@@ -64,7 +64,7 @@ This document defines the metric contract for ranking/compare layer, based stric
 - `hit_rate`
 - `window_count`
 
-### C) 全周期明细画像（沿用 summary.json / quarterly_stats.csv 口径）
+### C) 全周期明细画像（沿用 summary.json 口径）
 - `pnl`
 - `return_annualized`
 - `sharpe_annualized`

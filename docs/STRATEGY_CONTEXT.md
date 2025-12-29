@@ -313,6 +313,12 @@ Quarterly stats use equity_returns_with_first_zero and sharpe_annualized_from_re
 - 代码位置：bot/quarterly_stats.py::_build_row（关键变量：returns, turnover_proxy, net_exposure）  
 - Code location: bot/quarterly_stats.py::_build_row (key vars: returns, turnover_proxy, net_exposure)
 
+rank_runs 的 pct_days_* 指标口径以 summary.json 为准（pct_in_position/pct_long/pct_short），并由 equity_by_day 计算其余全周期画像指标。  
+rank_runs pct_days_* metrics come from summary.json (pct_in_position/pct_long/pct_short), with other full-period profile metrics computed from equity_by_day.
+
+- 代码位置：bot/rank_runs.py::_compute_profile_metrics（关键字段：pct_days_in_position/pct_days_long/pct_days_short）  
+- Code location: bot/rank_runs.py::_compute_profile_metrics (key fields: pct_days_in_position/pct_days_long/pct_days_short)
+
 ## 已知限制与未决问题 / Known Limitations & Open Questions
 未在策略逻辑中使用的配置项：neutral_band_pct在TREND_QUALITY中定义，但代码未读取或应用。  
 Unused config in strategy logic: neutral_band_pct is defined in TREND_QUALITY but is not read or applied in code.
