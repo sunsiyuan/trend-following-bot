@@ -272,7 +272,7 @@ def _compute_score(
     mdd_pass = mdd > MDD_PASS_GUARD
     mdd_score = compute_mdd_score(mdd, MDD_PASS_GUARD, MDD_HARD_GUARD)
     base = e_value / ui_eff
-    final = base * (mdd_score ** GAMMA)
+    final = e_value * ((mdd_score / ui_eff) ** GAMMA)
     return final, e_value, mdd_pass, base, mdd_score
 
 

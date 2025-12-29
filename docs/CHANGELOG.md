@@ -1,5 +1,8 @@
 # Documentation Versions
 
+## v7 - Final score UI sensitivity adjustment
+- Update rank `final` formula to `E * ((mdd_score / UI_eff) ** gamma)` to reduce UI sensitivity without adding parameters.
+
 ## v6 - Drawdown scoring soft/hard guards
 - Split drawdown guardrails into `mdd_pass_guard=-0.30` and `mdd_hard_guard=-0.60` with linear decay in between.
 - Documented the updated drawdown scoring and guard semantics.
