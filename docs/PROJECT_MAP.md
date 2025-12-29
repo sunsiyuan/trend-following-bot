@@ -187,6 +187,7 @@ flowchart TD
 ### Risk Params（风险参数）
 
 - **已有**：方向模式 `DIRECTION_MODE`、角度衰减/对齐（`ANGLE_SIZING_*`）。证据：`bot/config.py:L158-L170`，策略使用（`bot/strategy.py:L407-L410`）。
+- **多空缩放**：`MAX_LONG_FRAC` / `MAX_SHORT_FRAC` 按符号缩放目标仓位（空头更保守）。证据：`bot/config.py:L179-L186` 与 `bot/strategy.py:L314-L343`。
 - **未确认/未找到**：止损/止盈、最大回撤限制、风险状态机等在策略/配置/回测中没有实现（`risk_mode` 始终为 `None`）。证据：`bot/strategy.py:L33-L64, L353-L582`（`risk_mode=None`）。
 
 ### Data Params（数据参数）
@@ -226,6 +227,7 @@ flowchart TD
 ### Risk params
 
 - **Present**: `DIRECTION_MODE` and angle sizing (`ANGLE_SIZING_*`). Evidence: `bot/config.py:L158-L170`, usage in strategy (`bot/strategy.py:L407-L410`).
+- **Sign-based scaling**: `MAX_LONG_FRAC` / `MAX_SHORT_FRAC` scale the final target by direction (shorts more conservative). Evidence: `bot/config.py:L179-L186` and `bot/strategy.py:L314-L343`.
 - **Not found / unconfirmed**: stop-loss/take-profit/max drawdown/risk state machine; `risk_mode` remains `None`. Evidence: `bot/strategy.py:L33-L64, L353-L582`.
 
 ### Data params

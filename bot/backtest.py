@@ -366,6 +366,8 @@ def build_params_from_config() -> BacktestParams:
         trend_quality=dict(config.TREND_QUALITY),
         execution=dict(config.EXECUTION),
         direction_mode=config.DIRECTION_MODE,
+        max_long_frac=float(config.MAX_LONG_FRAC),
+        max_short_frac=float(config.MAX_SHORT_FRAC),
         starting_cash_usdc_per_symbol=float(config.STARTING_CASH_USDC_PER_SYMBOL),
         taker_fee_bps=float(config.TAKER_FEE_BPS),
     )
@@ -575,6 +577,7 @@ def run_backtest(
         "data_manifest_by_tf": manifest_flat,
         "data_manifest_by_symbol": per_symbol_manifests,
     })
+    write_json(run_dir / "summary_all.json", record)
 
     existing_runs = backtest_store.read_jsonl(runs_jsonl_path)
     existing_same = [

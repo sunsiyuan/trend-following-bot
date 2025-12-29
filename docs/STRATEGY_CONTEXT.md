@@ -205,17 +205,19 @@ The meaning of “fast/slow” in code is only reflected as two MA windows and t
 - Code location: bot/strategy.py::prepare_features_1d (key vars: trend_ma, quality_ma)
 
 ## 仓位生成 / Position Targeting
-目标仓位分数由fast_sign与align决定，并受方向模式限制。  
-Target position fraction is derived from fast_sign and align, with direction mode constraints.
+目标仓位分数由fast_sign与align决定，并受方向模式限制；方向模式先生成 desired_raw，再做按符号缩放。  
+Target position fraction is derived from fast_sign and align with direction mode constraints; direction mode produces desired_raw first, then applies sign-based scaling.
 
-- 公式：desired = 0 if fast_sign is NaN or 0  
-- Formula: desired = 0 if fast_sign is NaN or 0
-- 公式（both_side）：desired = fast_sign * align  
-- Formula (both_side): desired = fast_sign * align
-- 公式（long_only）：desired = align if fast_sign>0 else 0  
-- Formula (long_only): desired = align if fast_sign>0 else 0
-- 公式（short_only）：desired = -align if fast_sign<0 else 0  
-- Formula (short_only): desired = -align if fast_sign<0 else 0
+- 公式：desired_raw = 0 if fast_sign is NaN or 0  
+- Formula: desired_raw = 0 if fast_sign is NaN or 0
+- 公式（both_side）：desired_raw = fast_sign * align  
+- Formula (both_side): desired_raw = fast_sign * align
+- 公式（long_only）：desired_raw = align if fast_sign>0 else 0  
+- Formula (long_only): desired_raw = align if fast_sign>0 else 0
+- 公式（short_only）：desired_raw = -align if fast_sign<0 else 0  
+- Formula (short_only): desired_raw = -align if fast_sign<0 else 0
+- 公式（sign scaling）：desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0  
+- Formula (sign scaling): desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0
 - 代码位置：bot/strategy.py::compute_desired_target_frac（关键变量：fast_sign, align, direction_mode）  
 - Code location: bot/strategy.py::compute_desired_target_frac (key vars: fast_sign, align, direction_mode)
 
