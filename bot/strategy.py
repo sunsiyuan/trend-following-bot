@@ -18,7 +18,7 @@ Key design:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Literal, Optional
+from typing import Any, Dict, Literal, Optional
 
 import numpy as np
 import pandas as pd
@@ -103,7 +103,21 @@ def _last_row_at_or_before(df: pd.DataFrame, ts_ms: int) -> Optional[pd.Series]:
         return None
     return df.iloc[int(pos)]
 
-def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
+def _risk_value(params: Any, name: str, fallback: Any) -> Any:
+    if params is None:
+        return fallback
+    return getattr(params, name, fallback)
+
+def _vol_window_from_fast_window(
+    w_fast: int,
+    vol_window_div: float,
+    vol_window_min: int,
+    vol_window_max: int,
+) -> int:
+    n = int(round(w_fast / vol_window_div))
+    return max(vol_window_min, min(vol_window_max, n))
+
+def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.DataFrame:
     """
     Adds columns needed for 1D decisions, based on config.
     """
@@ -141,7 +155,10 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
 
     if te["indicator"] == "ma" and tq["indicator"] == "ma":
         w_fast = int(config.TREND_EXISTENCE["window"])
-        n_vol = config.vol_window_from_fast_window(w_fast)
+        vol_window_div = float(_risk_value(params, "vol_window_div", config.VOL_WINDOW_DIV))
+        vol_window_min = int(_risk_value(params, "vol_window_min", config.VOL_WINDOW_MIN))
+        vol_window_max = int(_risk_value(params, "vol_window_max", config.VOL_WINDOW_MAX))
+        n_vol = _vol_window_from_fast_window(w_fast, vol_window_div, vol_window_min, vol_window_max)
         # logret: log(hlc3_t) - log(hlc3_{t-1}); rolling std uses min_periods=n_vol.
         out["logret"] = np.log(price_series).diff()
         # delta: fast-slow log-slope mismatch.
@@ -154,12 +171,14 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         # sigma_mismatch_mean rescales sigma_price by vf and slope_k.
         out["sigma_mismatch_mean"] = out["sigma_price"] * np.sqrt(vf) / np.sqrt(float(slope_k))
         # z-score of slope mismatch, guarded by VOL_EPS.
+        vol_eps = float(_risk_value(params, "vol_eps", config.VOL_EPS))
         out["z"] = out["delta"] / np.maximum(
             out["sigma_mismatch_mean"],
-            config.VOL_EPS,
+            vol_eps,
         )
         # zq: quantized z toward zero (step = ANGLE_SIZING_Q).
-        out["zq"] = quantize_toward_zero(out["z"], config.ANGLE_SIZING_Q)
+        angle_sizing_q = float(_risk_value(params, "angle_sizing_q", config.ANGLE_SIZING_Q))
+        out["zq"] = quantize_toward_zero(out["z"], angle_sizing_q)
         # fast_state/slow_state: log-distance of price vs MAs.
         out["fast_state"] = np.log(out["hlc3"]) - np.log(out["trend_ma"])
         out["slow_state"] = np.log(out["hlc3"]) - np.log(out["quality_ma"])
@@ -179,9 +198,10 @@ def prepare_features_1d(df_1d: pd.DataFrame) -> pd.DataFrame:
         out["z_dir"] = slow_sign * out["z"]
         # penalty captures only negative alignment; then quantized to ANGLE_SIZING_Q.
         out["penalty"] = np.maximum(0.0, -out["z_dir"])
-        out["penalty_q"] = np.floor(out["penalty"] / config.ANGLE_SIZING_Q) * config.ANGLE_SIZING_Q
+        out["penalty_q"] = np.floor(out["penalty"] / angle_sizing_q) * angle_sizing_q
         # align: [0,1] attenuation from penalty_q via tanh (higher penalty -> lower align).
-        out["align"] = 1.0 - np.tanh(out["penalty_q"] / config.ANGLE_SIZING_A)
+        angle_sizing_a = float(_risk_value(params, "angle_sizing_a", config.ANGLE_SIZING_A))
+        out["align"] = 1.0 - np.tanh(out["penalty_q"] / angle_sizing_a)
         out["align"] = np.clip(out["align"], 0.0, 1.0)
         # NaN guard: if any prerequisite is NaN, force align=1.0 (no attenuation).
         nan_mask = out[
@@ -370,6 +390,7 @@ def decide(
     df_1d_feat: pd.DataFrame,
     df_exec_feat: pd.DataFrame,
     state: StrategyState,
+    params: Any | None = None,
 ) -> Dict[str, object]:
     """
     Main decision function (used by both backtest and live runner).
@@ -420,7 +441,8 @@ def decide(
 
     # Stage C: decide desired target.
     # align is an attenuation factor; if disabled, force align=1.0.
-    align = float(row_1d.get("align", 1.0)) if config.ANGLE_SIZING_ENABLED else 1.0
+    angle_sizing_enabled = bool(_risk_value(params, "angle_sizing_enabled", config.ANGLE_SIZING_ENABLED))
+    align = float(row_1d.get("align", 1.0)) if angle_sizing_enabled else 1.0
     desired = compute_desired_target_frac(fast_sign, align, config.DIRECTION_MODE)
 
     # Stage D: apply flip cooldown logic.

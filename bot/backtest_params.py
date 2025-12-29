@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from hashlib import sha256
 from typing import Any, Dict
 
+from bot import config
 from bot import strategy as strat
 
 def _normalize_for_json(obj: Any) -> Any:
@@ -42,6 +43,13 @@ class BacktestParams:
     trend_existence: Dict[str, Any] = field(default_factory=dict)
     trend_quality: Dict[str, Any] = field(default_factory=dict)
     execution: Dict[str, Any] = field(default_factory=dict)
+    angle_sizing_enabled: bool = config.ANGLE_SIZING_ENABLED
+    angle_sizing_a: float = config.ANGLE_SIZING_A
+    angle_sizing_q: float = config.ANGLE_SIZING_Q
+    vol_window_div: float = config.VOL_WINDOW_DIV
+    vol_window_min: int = config.VOL_WINDOW_MIN
+    vol_window_max: int = config.VOL_WINDOW_MAX
+    vol_eps: float = config.VOL_EPS
     direction_mode: str = "long_only"
     max_long_frac: float = 1.0
     max_short_frac: float = 0.25
@@ -56,6 +64,13 @@ class BacktestParams:
             "trend_existence": self.trend_existence,
             "trend_quality": self.trend_quality,
             "execution": self.execution,
+            "angle_sizing_enabled": self.angle_sizing_enabled,
+            "angle_sizing_a": self.angle_sizing_a,
+            "angle_sizing_q": self.angle_sizing_q,
+            "vol_window_div": self.vol_window_div,
+            "vol_window_min": self.vol_window_min,
+            "vol_window_max": self.vol_window_max,
+            "vol_eps": self.vol_eps,
             "direction_mode": self.direction_mode,
             "max_long_frac": self.max_long_frac,
             "max_short_frac": self.max_short_frac,
@@ -74,6 +89,13 @@ class BacktestParams:
             trend_existence=dict(payload.get("trend_existence", {})),
             trend_quality=dict(payload.get("trend_quality", {})),
             execution=dict(payload.get("execution", {})),
+            angle_sizing_enabled=bool(payload.get("angle_sizing_enabled", config.ANGLE_SIZING_ENABLED)),
+            angle_sizing_a=float(payload.get("angle_sizing_a", config.ANGLE_SIZING_A)),
+            angle_sizing_q=float(payload.get("angle_sizing_q", config.ANGLE_SIZING_Q)),
+            vol_window_div=float(payload.get("vol_window_div", config.VOL_WINDOW_DIV)),
+            vol_window_min=int(payload.get("vol_window_min", config.VOL_WINDOW_MIN)),
+            vol_window_max=int(payload.get("vol_window_max", config.VOL_WINDOW_MAX)),
+            vol_eps=float(payload.get("vol_eps", config.VOL_EPS)),
             direction_mode=str(payload.get("direction_mode", "long_only")),
             max_long_frac=float(payload.get("max_long_frac", 1.0)),
             max_short_frac=float(payload.get("max_short_frac", 0.25)),
