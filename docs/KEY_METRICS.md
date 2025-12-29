@@ -18,7 +18,7 @@ This document defines the metric contract for ranking/compare layer, based stric
 - `mdd_score = 1` if `dd <= 0.30`
 - `mdd_score = 0` if `dd >= 0.60`
 - `mdd_score = 1 - (dd - 0.30) / (0.60 - 0.30)` otherwise
-- `final = (E / UI_eff) * (mdd_score ** gamma)`
+- `final = E * ((mdd_score / UI_eff) ** gamma)`
 
 **Rolling**
 
