@@ -186,7 +186,7 @@ flowchart TD
 
 ### Risk Params（风险参数）
 
-- **已有**：方向模式 `DIRECTION_MODE`、角度衰减/对齐（`ANGLE_SIZING_*`）。证据：`bot/config.py:L158-L170`，策略使用（`bot/strategy.py:L407-L410`）。
+- **已有**：方向模式 `DIRECTION_MODE`、角度衰减/对齐（`ANGLE_SIZING_*`）；风险/对齐参数已进入 `BacktestParams` 并参与 `param_hash`。证据：`bot/config.py:L158-L170`、`bot/backtest_params.py:L39-L82`、`bot/strategy.py:L102-L420`。
 - **多空缩放**：`MAX_LONG_FRAC` / `MAX_SHORT_FRAC` 按符号缩放目标仓位（空头更保守）。证据：`bot/config.py:L179-L186` 与 `bot/strategy.py:L314-L343`。
 - **未确认/未找到**：止损/止盈、最大回撤限制、风险状态机等在策略/配置/回测中没有实现（`risk_mode` 始终为 `None`）。证据：`bot/strategy.py:L33-L64, L353-L582`（`risk_mode=None`）。
 
@@ -226,7 +226,7 @@ flowchart TD
 
 ### Risk params
 
-- **Present**: `DIRECTION_MODE` and angle sizing (`ANGLE_SIZING_*`). Evidence: `bot/config.py:L158-L170`, usage in strategy (`bot/strategy.py:L407-L410`).
+- **Present**: `DIRECTION_MODE` and angle sizing (`ANGLE_SIZING_*`); the risk/alignment params now live in `BacktestParams` and are part of `param_hash`. Evidence: `bot/config.py:L158-L170`, `bot/backtest_params.py:L39-L82`, usage in strategy (`bot/strategy.py:L102-L420`).
 - **Sign-based scaling**: `MAX_LONG_FRAC` / `MAX_SHORT_FRAC` scale the final target by direction (shorts more conservative). Evidence: `bot/config.py:L179-L186` and `bot/strategy.py:L314-L343`.
 - **Not found / unconfirmed**: stop-loss/take-profit/max drawdown/risk state machine; `risk_mode` remains `None`. Evidence: `bot/strategy.py:L33-L64, L353-L582`.
 
@@ -252,7 +252,7 @@ flowchart TD
 ## 可复现性检查
 
 - **run_id 默认确定性**：`run_backtest` 使用 `param_hash` 与 `data_fingerprint` 组装默认 `run_id`（`{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`）。证据：`bot/backtest.py:L402-L477`。
-- **参数哈希与数据指纹**：`BacktestParams.to_hashable_dict` + `calc_param_hash` 生成 `param_hash`，`backtest_store.build_data_manifest`/`calc_data_fingerprint` 生成 `data_fingerprint` 并写入 runs.jsonl。证据：`bot/backtest_params.py:L1-L63`、`bot/backtest_store.py:L70-L115`、`bot/backtest.py:L402-L533`。
+- **参数哈希与数据指纹**：`BacktestParams.to_hashable_dict` + `calc_param_hash` 生成 `param_hash`，`backtest_store.build_data_manifest`/`calc_data_fingerprint` 生成 `data_fingerprint` 并写入 runs.jsonl；风险/对齐参数（`angle_sizing_*`, `vol_*`）已进入 `BacktestParams` 并参与 hash。证据：`bot/backtest_params.py:L1-L80`、`bot/backtest_store.py:L70-L115`、`bot/backtest.py:L402-L533`、`bot/strategy.py:L102-L420`。
 - **strategy_version 来源**：`bot/strategy.py::STRATEGY_VERSION`，进入 `BacktestParams.to_hashable_dict` 从而影响 `param_hash` 与默认 `run_id`，并落盘到 `run_record.json`/`runs.jsonl`。证据：`bot/strategy.py:L27-L30`、`bot/backtest_params.py:L29-L56`、`bot/backtest.py:L502-L560`。
 - **数据读取仍依赖实时网络**：`data_client` 通过 `requests.post` 调用 Hyperliquid API；若缓存不足将下载。证据：`bot/data_client.py:L156-L215, L380-L392`。
 - **当前时间仍用于数据抓取的闭合K线过滤**：`fetch_candle_snapshot` 使用 `now_ms()` 过滤未收盘K线，但回测切片不再使用 `now()`。证据：`bot/data_client.py:L211-L229` 与 `bot/backtest_store.py:L28-L64`。

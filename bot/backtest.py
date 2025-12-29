@@ -365,6 +365,13 @@ def build_params_from_config() -> BacktestParams:
         trend_existence=dict(config.TREND_EXISTENCE),
         trend_quality=dict(config.TREND_QUALITY),
         execution=dict(config.EXECUTION),
+        angle_sizing_enabled=bool(config.ANGLE_SIZING_ENABLED),
+        angle_sizing_a=float(config.ANGLE_SIZING_A),
+        angle_sizing_q=float(config.ANGLE_SIZING_Q),
+        vol_window_div=float(config.VOL_WINDOW_DIV),
+        vol_window_min=int(config.VOL_WINDOW_MIN),
+        vol_window_max=int(config.VOL_WINDOW_MAX),
+        vol_eps=float(config.VOL_EPS),
         direction_mode=config.DIRECTION_MODE,
         max_long_frac=float(config.MAX_LONG_FRAC),
         max_short_frac=float(config.MAX_SHORT_FRAC),
@@ -544,6 +551,10 @@ def run_backtest(
         params_obj,
         df_trend,
         df_exec,
+        run_id=resolved_run_id,
+        param_hash=param_hash,
+        data_fingerprint=data_fingerprint,
+        strategy_version=params_hashable.get("strategy_version"),
     )
     per_symbol_summaries.append(summary)
 
@@ -632,6 +643,10 @@ def run_backtest_for_symbol(
     params: BacktestParams,
     df_1d: pd.DataFrame,
     df_ex: pd.DataFrame,
+    run_id: str | None = None,
+    param_hash: str | None = None,
+    data_fingerprint: str | None = None,
+    strategy_version: str | None = None,
 ) -> Dict:
     """
     One-symbol backtest (simple and debuggable). Multi-symbol aggregation is handled by caller.
@@ -639,7 +654,7 @@ def run_backtest_for_symbol(
     if df_1d.empty or df_ex.empty:
         raise RuntimeError(f"Insufficient market data for {symbol}")
 
-    df_1d_feat = strat.prepare_features_1d(df_1d)
+    df_1d_feat = strat.prepare_features_1d(df_1d, params=params)
     df_ex_feat = strat.prepare_features_exec(df_ex)
 
     # Backtest state
@@ -777,6 +792,7 @@ def run_backtest_for_symbol(
             df_1d_feat=df_1d_feat,
             df_exec_feat=df_ex_feat,
             state=state,
+            params=params,
         )
 
         missing = [key for key in strat.DECISION_KEYS if key not in decision]
@@ -941,6 +957,10 @@ def run_backtest_for_symbol(
         params.direction_mode,
     )
     summary = {
+        "run_id": run_id,
+        "param_hash": param_hash,
+        "data_fingerprint": data_fingerprint,
+        "strategy_version": strategy_version,
         "symbol": symbol,
         "start_date_utc": ms_to_ymd(start_ms),
         "end_date_utc": ms_to_ymd(end_ms - 1),
@@ -952,6 +972,15 @@ def run_backtest_for_symbol(
             "trend_quality": dict(params.trend_quality),
             "execution": dict(params.execution),
             "direction_mode": params.direction_mode,
+        },
+        "risk_sizing": {
+            "angle_sizing_enabled": bool(params.angle_sizing_enabled),
+            "angle_sizing_a": float(params.angle_sizing_a),
+            "angle_sizing_q": float(params.angle_sizing_q),
+            "vol_window_div": float(params.vol_window_div),
+            "vol_window_min": int(params.vol_window_min),
+            "vol_window_max": int(params.vol_window_max),
+            "vol_eps": float(params.vol_eps),
         },
         **exposure_diagnostics,
         **diagnostic_counts,

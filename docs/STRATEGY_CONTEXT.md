@@ -21,6 +21,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **时间边界语义**：回测裁剪固定为 start inclusive、end exclusive（使用 `backtest_store.slice_bars` 基于 `open_ts`/`close_ts` 裁剪）。回测侧不允许 `now()` 裁剪。  
 - **data_fingerprint（低配 manifest）**：每个 timeframe 生成 manifest，字段固定为 `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`，并通过 `stable_json` + `sha256` 生成 `data_fingerprint`。  
 - **param_hash**：`BacktestParams.to_hashable_dict` 只包含影响结果的参数；`stable_json` 后 sha256 得到 `param_hash`。  
+- **risk sizing 参数注入**：`BacktestParams` 注入 `angle_sizing_*` 与 `vol_*` 到策略特征/对齐逻辑，并参与 `param_hash`，保证可复现。  
 - **strategy_version**：`bot/strategy.py` 定义 `STRATEGY_VERSION` 作为结构性变更护栏，并进入 `param_hash`；任何结构件增删、信号定义变更、仓位函数变更都必须 bump。  
 - **run_id 格式**：默认 `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`，CLI 可用 `--run_id` 覆盖。  
 
@@ -29,6 +30,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **Time boundary semantics**: slicing is start-inclusive, end-exclusive via `backtest_store.slice_bars` using `open_ts`/`close_ts`. No `now()` trimming in backtest slicing.  
 - **data_fingerprint (minimal manifest)**: each timeframe emits a manifest with fields `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`, hashed via `stable_json` + `sha256`.  
 - **param_hash**: `BacktestParams.to_hashable_dict` includes only result-affecting params; `stable_json` + sha256 yields `param_hash`.  
+- **Risk sizing injection**: `BacktestParams` injects `angle_sizing_*` and `vol_*` into feature/alignment logic and includes them in `param_hash` for reproducibility.  
 - **strategy_version**: `STRATEGY_VERSION` in `bot/strategy.py` is a structural-change guardrail and is included in `param_hash`; bump it when components/signals/position sizing change.  
 - **run_id format**: default is `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`, overridable via CLI `--run_id`.  
 
@@ -119,12 +121,10 @@ Return/volatility proxies (computed only when both trend existence and quality a
 - Formula: logret_t = ln(hlc3_t) - ln(hlc3_{t-1})
 - 公式：sigma_price = rolling_std(logret, n_vol, min_periods=n_vol)  
 - Formula: sigma_price = rolling_std(logret, n_vol, min_periods=n_vol)
-- 公式：n_vol = vol_window_from_fast_window(w_fast)  
-- Formula: n_vol = vol_window_from_fast_window(w_fast)
-- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：logret, sigma_price, n_vol）  
-- Code location: bot/strategy.py::prepare_features_1d (key vars: logret, sigma_price, n_vol)
-- 代码位置：bot/config.py::vol_window_from_fast_window（关键变量：VOL_WINDOW_DIV, VOL_WINDOW_MIN, VOL_WINDOW_MAX）  
-- Code location: bot/config.py::vol_window_from_fast_window (key vars: VOL_WINDOW_DIV, VOL_WINDOW_MIN, VOL_WINDOW_MAX)
+- 公式：n_vol = vol_window_from_fast_window(w_fast, vol_window_div, vol_window_min, vol_window_max)  
+- Formula: n_vol = vol_window_from_fast_window(w_fast, vol_window_div, vol_window_min, vol_window_max)
+- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：logret, sigma_price, n_vol；参数来自 BacktestParams 的 vol_*）  
+- Code location: bot/strategy.py::prepare_features_1d (key vars: logret, sigma_price, n_vol; params from BacktestParams vol_* fields)
 
 量化（quantization）函数用于z的向零量化：  
 Quantization function used for z is toward-zero: 
@@ -135,8 +135,8 @@ Quantization function used for z is toward-zero:
 - Code location: bot/indicators.py::quantize_toward_zero (key vars: x, q)
 
 ## 对齐度 align / Alignment
-对齐度在MA/MA路径中定义为“斜率不匹配惩罚”的tanh衰减；若任何关键输入为NaN则align强制为1.0。  
-Alignment is defined on the MA/MA path as a tanh attenuation of slope mismatch penalty; if any key inputs are NaN, align is forced to 1.0.
+对齐度在MA/MA路径中定义为“斜率不匹配惩罚”的tanh衰减；`VOL_EPS`、`ANGLE_SIZING_Q/A` 来自 BacktestParams 的 risk sizing 字段；若任何关键输入为NaN则align强制为1.0。  
+Alignment is defined on the MA/MA path as a tanh attenuation of slope mismatch penalty; `VOL_EPS` and `ANGLE_SIZING_Q/A` come from BacktestParams risk sizing fields; if any key inputs are NaN, align is forced to 1.0.
 
 - 公式：delta = trend_log_slope - quality_log_slope  
 - Formula: delta = trend_log_slope - quality_log_slope
