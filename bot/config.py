@@ -66,13 +66,14 @@ class TrendExistenceCfg(TypedDict):
     window: int
     ma_type: NotRequired[MAType]
     slope_k: NotRequired[int]
+    # fast_state_deadband_pct: +/- band around trend_ma in pct terms (log1p scale in code).
+    # 0.0 disables the deadband+stickiness behavior.
+    fast_state_deadband_pct: NotRequired[float]
 
 class TrendQualityCfg(TypedDict):
     # 趋势质量层：回答“最多可以给多大仓位？”
     # v1 固定用 MA（更容易解释与调参）
-    # neutral_band_pct 是一个非常关键的“去抖动”参数：
-    # - 越大：越容易判定为中性/不加仓（降低暴露、减少反复进出）
-    # - 越小：越激进（暴露更高，但震荡期回撤/换手可能更差）
+    # neutral_band_pct 目前未使用（保留仅用于向后兼容，后续将移除）。
     indicator: Literal["ma"]
     timeframe: str
     window: int
@@ -117,12 +118,10 @@ TREND_EXISTENCE: TrendExistenceCfg = {
     "window": 15,
     "ma_type": "ema",
     "slope_k": 3,
+    "fast_state_deadband_pct": 0.0,
 }
 
-# 趋势质量层默认：MA(1d, 50) + neutral band
-# neutral_band_pct 是你现在“暴露 vs 回撤”的大旋钮之一：
-# - 如果你觉得“暴露不够”：可以先把 band 降低一点（例如 1% -> 0.5%）
-# - 如果你觉得“震荡期亏太多/反复进出”：提高 band（例如 1% -> 1.5%/2%）
+# 趋势质量层默认：MA(1d, 50) + neutral band（当前未使用）
 TREND_QUALITY: TrendQualityCfg = {
     "indicator": "ma",
     "timeframe": TIMEFRAMES["trend"],
