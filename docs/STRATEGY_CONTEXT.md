@@ -14,6 +14,24 @@ Strategy intent is not explicitly declared in code; names and flow suggest a tre
 输入与输出的“契约”如下（仅基于代码）：输入为多时间尺度K线数据（含close/高低价等字段），输出为目标仓位比例（target_pos_frac，范围逻辑为-1..+1）与动作意图（HOLD/REBALANCE）。  
 The input/output “contract” is as follows (code-only): inputs are multi-timeframe candles (including close/high/low fields), outputs are a target position fraction (target_pos_frac, logically -1..+1) and an action intent (HOLD/REBALANCE).
 
+## Execution Policy Contract / 执行意图契约
+
+**中文**
+
+- **单一真源**：执行意图判断集中在 `bot/execution_policy.py::compute_trade_intent`，用于在“目标仓位差值”基础上区分真实交易 vs 小幅漂移（NOOP_SMALL_DELTA）。  
+- **输入**：`equity/current_notional/target_notional/min_trade_notional_pct/must_trade`。  
+- **输出**：`trade_intent=TRADE|NOOP_SMALL_DELTA`，并附带 `delta_notional`、`threshold_notional` 与 `reason`。  
+- **强制绕过**：当 `must_trade=True`（如清仓/归零）时直接返回 `TRADE`，不受 min_trade_notional 阈值影响。  
+- **回测契约**：backtest 仅在 trade_intent=TRADE 时进入执行/撮合路径；NOOP_SMALL_DELTA 不属于 blocked，不更新执行 gate 状态。  
+
+**English**
+
+- **Single source of truth**: trade intent decisions live in `bot/execution_policy.py::compute_trade_intent`, separating real trades from small drift (NOOP_SMALL_DELTA).  
+- **Inputs**: `equity/current_notional/target_notional/min_trade_notional_pct/must_trade`.  
+- **Outputs**: `trade_intent=TRADE|NOOP_SMALL_DELTA` with `delta_notional`, `threshold_notional`, and `reason`.  
+- **Forced bypass**: when `must_trade=True` (e.g., flatten/zero-out), it always returns `TRADE` regardless of min_trade_notional.  
+- **Backtest contract**: execution/simulation only runs for trade_intent=TRADE; NOOP_SMALL_DELTA is not blocked and does not update gate timing.  
+
 ## Backtest Experiment Contract / 回测实验契约
 
 **中文**

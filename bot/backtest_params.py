@@ -55,6 +55,7 @@ class BacktestParams:
     max_short_frac: float = 0.25
     starting_cash_usdc_per_symbol: float = 0.0
     taker_fee_bps: float = 0.0
+    min_trade_notional_pct: float = config.MIN_TRADE_NOTIONAL_PCT
 
     def to_hashable_dict(self) -> Dict[str, Any]:
         return {
@@ -76,6 +77,7 @@ class BacktestParams:
             "max_short_frac": self.max_short_frac,
             "starting_cash_usdc_per_symbol": self.starting_cash_usdc_per_symbol,
             "taker_fee_bps": self.taker_fee_bps,
+            "min_trade_notional_pct": self.min_trade_notional_pct,
         }
 
     def param_hash(self) -> str:
@@ -101,4 +103,5 @@ class BacktestParams:
             max_short_frac=float(payload.get("max_short_frac", 0.25)),
             starting_cash_usdc_per_symbol=float(payload.get("starting_cash_usdc_per_symbol", 0.0)),
             taker_fee_bps=float(payload.get("taker_fee_bps", 0.0)),
+            min_trade_notional_pct=float(payload.get("min_trade_notional_pct", config.MIN_TRADE_NOTIONAL_PCT)),
         )

@@ -29,6 +29,7 @@ from bot import config
 from bot import data_client
 from bot import metrics
 from bot import backtest_store
+from bot import execution_policy
 from bot.backtest_params import BacktestParams, calc_param_hash
 from bot.quarterly_stats import generate_quarterly_stats
 from bot import strategy as strat
@@ -84,12 +85,15 @@ def compute_trade_decision_counts(trades: List[Dict]) -> Dict:
     decision_count = len(trades)
     rebalance_count = 0
     hold_count = 0
+    noop_small_delta_count = 0
     rebalance_by_reason: Dict[str, int] = {}
     hold_by_reason: Dict[str, int] = {}
 
     for trade in trades:
         action = trade.get("action")
         reason = trade.get("reason", "unknown")
+        if trade.get("trade_intent") == "NOOP_SMALL_DELTA":
+            noop_small_delta_count += 1
         if action == "REBALANCE":
             rebalance_count += 1
             rebalance_by_reason[reason] = rebalance_by_reason.get(reason, 0) + 1
@@ -102,6 +106,7 @@ def compute_trade_decision_counts(trades: List[Dict]) -> Dict:
         "rebalance_count": rebalance_count,
         "hold_count": hold_count,
         "trade_count": rebalance_count,
+        "noop_small_delta_count": noop_small_delta_count,
         "rebalance_by_reason": rebalance_by_reason,
         "hold_by_reason": hold_by_reason,
     }
@@ -377,6 +382,7 @@ def build_params_from_config() -> BacktestParams:
         max_short_frac=float(config.MAX_SHORT_FRAC),
         starting_cash_usdc_per_symbol=float(config.STARTING_CASH_USDC_PER_SYMBOL),
         taker_fee_bps=float(config.TAKER_FEE_BPS),
+        min_trade_notional_pct=float(config.MIN_TRADE_NOTIONAL_PCT),
     )
 
 
@@ -799,7 +805,6 @@ def run_backtest_for_symbol(
         assert not missing, f"Decision missing keys: {missing}"
 
         target_frac = float(decision.get("target_pos_frac") or 0.0)
-        reason = decision.get("reason") or "already_at_target"
         current_notional = qty * price
         current_pos_frac = current_notional / equity if abs(equity) > 1e-12 else 0.0
         # Use current equity pre-trade to translate fraction -> notional.
@@ -807,9 +812,22 @@ def run_backtest_for_symbol(
         next_pos_frac = target_frac
         delta_pos_frac = next_pos_frac - current_pos_frac
 
-        delta_notional = target_notional - current_notional
-        if abs(delta_notional) < 1e-8:
-            # no trade
+        must_trade = False
+        if abs(target_notional) <= 1e-12 and abs(current_notional) > 1e-12:
+            must_trade = True
+
+        policy_result = execution_policy.compute_trade_intent(
+            equity=float(equity),
+            current_notional=float(current_notional),
+            target_notional=float(target_notional),
+            min_trade_notional_pct=float(params.min_trade_notional_pct),
+            must_trade=must_trade,
+        )
+        trade_intent = policy_result["trade_intent"]
+        delta_notional = float(policy_result["delta_notional"])
+        threshold_notional = float(policy_result["threshold_notional"])
+
+        if trade_intent == "NOOP_SMALL_DELTA":
             ts_utc = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).isoformat()
             record: Dict[str, object] = {}
             record.update(decision)
@@ -820,6 +838,11 @@ def run_backtest_for_symbol(
                 "symbol": symbol,
                 "bar_interval": params.timeframes["execution"],
                 "action": "HOLD",
+                "trade_intent": trade_intent,
+                "min_trade_notional_pct": float(params.min_trade_notional_pct),
+                "threshold_notional_usdc": float(threshold_notional),
+                "decision_reason": decision.get("reason"),
+                "update_last_exec": False,
                 "close_px": price,
                 "current_pos_frac": float(current_pos_frac),
                 "next_pos_frac": float(current_pos_frac),
@@ -833,12 +856,12 @@ def run_backtest_for_symbol(
                 "position_frac_after": float(current_pos_frac),
                 "avg_entry_after": float(avg_entry),
                 "realized_pnl_usdc": 0.0,
-                "reason": reason,
+                "reason": "noop_small_delta",
             })
             trades.append(record)
-            if decision.get("update_last_exec"):
-                state.last_exec_bar_idx = bar_idx
             continue
+
+        reason = decision.get("reason") or "already_at_target"
 
         dq = delta_notional / price
         equity_before = equity
@@ -875,6 +898,9 @@ def run_backtest_for_symbol(
             "symbol": symbol,
             "bar_interval": params.timeframes["execution"],
             "action": decision.get("action", "REBALANCE"),
+            "trade_intent": trade_intent,
+            "min_trade_notional_pct": float(params.min_trade_notional_pct),
+            "threshold_notional_usdc": float(threshold_notional),
             "close_px": price,
             "current_pos_frac": float(current_pos_frac),
             "next_pos_frac": float(next_pos_frac),
@@ -967,6 +993,7 @@ def run_backtest_for_symbol(
         "starting_cash_usdc": float(params.starting_cash_usdc_per_symbol),
         **decision_counts,
         "fee_bps": float(params.taker_fee_bps),
+        "min_trade_notional_pct": float(params.min_trade_notional_pct),
         "layers": {
             "trend_existence": dict(params.trend_existence),
             "trend_quality": dict(params.trend_quality),
@@ -1071,6 +1098,7 @@ def main() -> None:
             "DIRECTION_MODE": config.DIRECTION_MODE,
             "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
             "TAKER_FEE_BPS": config.TAKER_FEE_BPS,
+            "MIN_TRADE_NOTIONAL_PCT": config.MIN_TRADE_NOTIONAL_PCT,
             "HL_INFO_URL": config.HL_INFO_URL,
         })
 

@@ -19,6 +19,7 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 │  ├─ backtest_params.py         # 回测参数容器 + stable_json + param_hash
 │  ├─ backtest_store.py          # 数据切片/manifest/fingerprint + runs.jsonl 写入
 │  ├─ config.py                  # 参数/常量单一真相源（symbols、timeframes、费用等）
+│  ├─ execution_policy.py        # 执行意图判定（trade vs NOOP_SMALL_DELTA）单一真源
 │  ├─ data_client.py             # 数据下载/缓存/读取（Hyperliquid candleSnapshot）
 │  ├─ indicators.py              # 指标计算（MA、Donchian、log_slope、hlc3 等）
 │  ├─ metrics.py                 # 回测指标计算（收益、回撤、Sharpe、Ulcer 等）
@@ -43,6 +44,7 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 │  ├─ backtest_params.py         # Backtest params container + stable_json + param_hash
 │  ├─ backtest_store.py          # Data slicing/manifest/fingerprint + runs.jsonl append
 │  ├─ config.py                  # Single source of truth for parameters
+│  ├─ execution_policy.py        # Trade intent policy (trade vs NOOP_SMALL_DELTA)
 │  ├─ data_client.py             # Data download/cache/read (Hyperliquid)
 │  ├─ indicators.py              # Indicator math helpers
 │  ├─ metrics.py                 # Backtest performance metrics
@@ -92,7 +94,8 @@ flowchart TD
     RUNSYM -->|ensure_market_data| DATA[data_client.ensure_market_data]
     RUN -->|features| FEAT[strategy.prepare_features_1d / prepare_features_exec]
     RUN -->|decision| DEC[strategy.decide]
-    DEC -->|target_pos_frac| SIM[backtest cash+position simulation]
+    DEC -->|target_pos_frac| POL[execution_policy.compute_trade_intent]
+    POL -->|trade_intent| SIM[backtest cash+position simulation]
     SIM -->|equity series| MET[metrics.compute_equity_metrics + build_buy_hold_curve]
     MET --> OUT[summary.json / equity_by_day.csv / trades.jsonl]
     OUT --> Q[quarterly_stats.csv]
