@@ -26,7 +26,7 @@ import pandas as pd
 from bot import config
 from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
-STRATEGY_VERSION = "v2"
+STRATEGY_VERSION = "v3"
 # NOTE: Any structural strategy change (components added/removed, signal definitions,
 # or position-sizing logic changes) must bump STRATEGY_VERSION.
 
@@ -40,6 +40,8 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "risk_mode": None,
     "fast_dir": None,
     "fast_sign": None,
+    "fast_sign_raw": None,
+    "fast_sign_eff": None,
     "slow_dir": None,
     "slow_sign": None,
     "hlc3": None,
@@ -47,6 +49,8 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "ema_slow": None,
     "fast_state": None,
     "slow_state": None,
+    "fast_deadband_active": None,
+    "fast_state_deadband_pct": None,
     "s_fast": None,
     "s_slow": None,
     "align": None,
@@ -117,6 +121,42 @@ def _vol_window_from_fast_window(
     n = int(round(w_fast / vol_window_div))
     return max(vol_window_min, min(vol_window_max, n))
 
+def _apply_fast_sign_deadband(
+    fast_state: pd.Series,
+    fast_sign_raw: pd.Series,
+    deadband_pct: float,
+) -> tuple[pd.Series, pd.Series]:
+    eps = np.log1p(deadband_pct)
+    if not np.isfinite(eps) or eps <= 0:
+        return fast_sign_raw.copy(), pd.Series(False, index=fast_state.index)
+
+    fast_sign_eff = pd.Series(np.nan, index=fast_sign_raw.index, dtype="float64")
+    fast_deadband_active = pd.Series(False, index=fast_state.index)
+
+    prev = np.nan
+    for raw in fast_sign_raw.values:
+        if not np.isnan(raw):
+            prev = float(raw)
+            break
+
+    if np.isnan(prev):
+        return fast_sign_eff, fast_deadband_active
+
+    for idx, (state, raw) in enumerate(zip(fast_state.values, fast_sign_raw.values)):
+        if np.isnan(state) or np.isnan(raw):
+            fast_sign_eff.iat[idx] = raw
+        else:
+            in_band = abs(state) < eps
+            fast_deadband_active.iat[idx] = in_band
+            if in_band:
+                fast_sign_eff.iat[idx] = prev
+            else:
+                fast_sign_eff.iat[idx] = raw
+        if not np.isnan(fast_sign_eff.iat[idx]):
+            prev = float(fast_sign_eff.iat[idx])
+
+    return fast_sign_eff, fast_deadband_active
+
 def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.DataFrame:
     """
     Adds columns needed for 1D decisions, based on config.
@@ -183,16 +223,26 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         out["fast_state"] = np.log(out["hlc3"]) - np.log(out["trend_ma"])
         out["slow_state"] = np.log(out["hlc3"]) - np.log(out["quality_ma"])
         # fast_sign/slow_sign map state to {+1,0,-1} with NaN preserved.
-        out["fast_sign"] = np.where(
+        fast_sign_raw = np.where(
             out["fast_state"] > 0,
             1.0,
             np.where(out["fast_state"] < 0, -1.0, np.where(out["fast_state"].isna(), np.nan, 0.0)),
         )
+        out["fast_sign_raw"] = fast_sign_raw
         slow_sign = np.where(
             out["slow_state"] > 0,
             1.0,
             np.where(out["slow_state"] < 0, -1.0, np.where(out["slow_state"].isna(), np.nan, 0.0)),
         )
+        deadband_pct = float(te.get("fast_state_deadband_pct", 0.0))
+        fast_sign_eff, fast_deadband_active = _apply_fast_sign_deadband(
+            out["fast_state"],
+            pd.Series(fast_sign_raw, index=out.index, dtype="float64"),
+            deadband_pct,
+        )
+        out["fast_sign_eff"] = fast_sign_eff
+        out["fast_deadband_active"] = fast_deadband_active
+        out["fast_sign"] = out["fast_sign_eff"]
         out["slow_sign"] = slow_sign
         # z_dir: z aligned to slow_sign; negative implies misalignment.
         out["z_dir"] = slow_sign * out["z"]
@@ -216,7 +266,7 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
                 "z",
                 "fast_state",
                 "slow_state",
-                "fast_sign",
+                "fast_sign_eff",
                 "slow_sign",
             ]
         ].isna().any(axis=1)
@@ -232,7 +282,10 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         out["fast_state"] = np.nan
         out["slow_state"] = np.nan
         out["fast_sign"] = np.nan
+        out["fast_sign_raw"] = np.nan
+        out["fast_sign_eff"] = np.nan
         out["slow_sign"] = np.nan
+        out["fast_deadband_active"] = np.nan
         out["z_dir"] = np.nan
         out["penalty"] = np.nan
         out["penalty_q"] = np.nan
@@ -433,11 +486,17 @@ def decide(
     # Stage B: determine market state (LONG/SHORT).
     # raw_dir uses trend existence (MA slope or Donchian); market_state follows fast_sign.
     raw_dir = decide_trend_existence(row_1d)
-    fast_sign = float(row_1d.get("fast_sign", np.nan))
+    fast_sign_raw = float(row_1d.get("fast_sign_raw", row_1d.get("fast_sign", np.nan)))
+    fast_sign_eff = float(row_1d.get("fast_sign_eff", row_1d.get("fast_sign", np.nan)))
+    fast_sign = fast_sign_eff
     slow_sign = float(row_1d.get("slow_sign", np.nan))
     fast_dir = _dir_from_sign(fast_sign)
     slow_dir = _dir_from_sign(slow_sign)
     market_state: Optional[MarketState] = fast_dir
+    fast_deadband_active = row_1d.get("fast_deadband_active")
+    if fast_deadband_active is not None and not pd.isna(fast_deadband_active):
+        fast_deadband_active = bool(fast_deadband_active)
+    fast_state_deadband_pct = config.TREND_EXISTENCE.get("fast_state_deadband_pct", 0.0)
 
     # Stage C: decide desired target.
     # align is an attenuation factor; if disabled, force align=1.0.
@@ -480,6 +539,8 @@ def decide(
             risk_mode=None,
             fast_dir=fast_dir,
             fast_sign=fast_sign,
+            fast_sign_raw=fast_sign_raw,
+            fast_sign_eff=fast_sign_eff,
             slow_dir=slow_dir,
             slow_sign=slow_sign,
             hlc3=row_1d.get("hlc3"),
@@ -487,6 +548,8 @@ def decide(
             ema_slow=row_1d.get("quality_ma"),
             fast_state=row_1d.get("fast_state"),
             slow_state=row_1d.get("slow_state"),
+            fast_deadband_active=fast_deadband_active,
+            fast_state_deadband_pct=fast_state_deadband_pct,
             s_fast=row_1d.get("trend_log_slope"),
             s_slow=row_1d.get("quality_log_slope"),
             align=align,
@@ -544,6 +607,8 @@ def decide(
             risk_mode=None,
             fast_dir=fast_dir,
             fast_sign=fast_sign,
+            fast_sign_raw=fast_sign_raw,
+            fast_sign_eff=fast_sign_eff,
             slow_dir=slow_dir,
             slow_sign=slow_sign,
             hlc3=row_1d.get("hlc3"),
@@ -551,6 +616,8 @@ def decide(
             ema_slow=row_1d.get("quality_ma"),
             fast_state=row_1d.get("fast_state"),
             slow_state=row_1d.get("slow_state"),
+            fast_deadband_active=fast_deadband_active,
+            fast_state_deadband_pct=fast_state_deadband_pct,
             s_fast=row_1d.get("trend_log_slope"),
             s_slow=row_1d.get("quality_log_slope"),
             align=align,
@@ -590,6 +657,8 @@ def decide(
         risk_mode=None,
         fast_dir=fast_dir,
         fast_sign=fast_sign,
+        fast_sign_raw=fast_sign_raw,
+        fast_sign_eff=fast_sign_eff,
         slow_dir=slow_dir,
         slow_sign=slow_sign,
         hlc3=row_1d.get("hlc3"),
@@ -597,6 +666,8 @@ def decide(
         ema_slow=row_1d.get("quality_ma"),
         fast_state=row_1d.get("fast_state"),
         slow_state=row_1d.get("slow_state"),
+        fast_deadband_active=fast_deadband_active,
+        fast_state_deadband_pct=fast_state_deadband_pct,
         s_fast=row_1d.get("trend_log_slope"),
         s_slow=row_1d.get("quality_log_slope"),
         align=align,

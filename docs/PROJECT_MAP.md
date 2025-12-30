@@ -121,13 +121,13 @@ flowchart TD
 | 趋势存在层 (trend existence) | `strategy.prepare_features_1d` + `decide_trend_existence` | 1D 数据 (HLC3 / MA / Donchian) | `raw_dir` 方向（LONG/SHORT/None） | `bot/strategy.py:L102-L259` + 指标 `bot/indicators.py:L18-L74` |
 | 趋势质量/对齐层 (trend quality / alignment) | `strategy.prepare_features_1d` 中的 `quality_*`、`align` 计算 | 1D 数据 + MA/log_slope/波动估计 | `align` (0..1) 调整目标仓位幅度 | `bot/strategy.py:L129-L200` + `bot/config.py:L160-L170` |
 | 执行层 (execution layer) | `strategy.prepare_features_exec` + `execution_gate_mode` | 执行周期数据（close + exec_ma） | 是否允许执行（gate） | `bot/strategy.py:L219-L308` |
-| 目标仓位 & 平滑 | `compute_desired_target_frac` + `smooth_target` | `fast_sign`, `align`, `direction_mode` | `desired_pos_frac` 与 `target_pos_frac` | `bot/strategy.py:L310-L337, L538-L582` |
+| 目标仓位 & 平滑 | `compute_desired_target_frac` + `smooth_target` | `fast_sign_eff`, `align`, `direction_mode` | `desired_pos_frac` 与 `target_pos_frac` | `bot/strategy.py:L310-L337, L538-L582` |
 | 状态/冷却 | `StrategyState` + flip cooldown 逻辑 | 上次执行 bar + 目标侧 | 冷却期阻止反向直接翻转 | `bot/strategy.py:L81-L87, L412-L435` |
 
 ## 输入输出说明（面向交易员）
 
 - **输入**：
-  - 1D 特征表：`strategy.prepare_features_1d` 需要包含 `open/high/low/close` 等 OHLC，输出包含 `hlc3`、`trend_ma`、`quality_ma`、`fast_sign/slow_sign`、`align` 等用于决策的列。证据：`bot/strategy.py:L102-L216`。
+  - 1D 特征表：`strategy.prepare_features_1d` 需要包含 `open/high/low/close` 等 OHLC，输出包含 `hlc3`、`trend_ma`、`quality_ma`、`fast_sign_raw/fast_sign_eff/slow_sign`、`align` 等用于决策的列。证据：`bot/strategy.py:L102-L216`。
   - 执行周期特征表：`strategy.prepare_features_exec` 生成 `exec_ma` 用于执行过滤。证据：`bot/strategy.py:L219-L228`。
 - **输出**：
   - `strategy.decide` 产出包含 `desired_pos_frac`、`target_pos_frac`、`action`、`reason` 等字段，被回测与 live runner 直接消费。证据：`bot/strategy.py:L353-L582`，回测消费位置 `bot/backtest.py:L501-L605`。
@@ -147,13 +147,13 @@ flowchart TD
 | Trend existence | `strategy.prepare_features_1d` + `decide_trend_existence` | 1D data (HLC3/MA/Donchian) | `raw_dir` LONG/SHORT/None | `bot/strategy.py:L102-L259` + `bot/indicators.py:L18-L74` |
 | Trend quality / alignment | `strategy.prepare_features_1d` (`quality_*`, `align`) | 1D data + MA/log_slope/vol | `align` (0..1) attenuates target | `bot/strategy.py:L129-L200` + `bot/config.py:L160-L170` |
 | Execution layer | `strategy.prepare_features_exec` + `execution_gate_mode` | Execution timeframe data (close + exec_ma) | execution gate allow/deny | `bot/strategy.py:L219-L308` |
-| Target sizing & smoothing | `compute_desired_target_frac` + `smooth_target` | `fast_sign`, `align`, `direction_mode` | `desired_pos_frac` & `target_pos_frac` | `bot/strategy.py:L310-L337, L538-L582` |
+| Target sizing & smoothing | `compute_desired_target_frac` + `smooth_target` | `fast_sign_eff`, `align`, `direction_mode` | `desired_pos_frac` & `target_pos_frac` | `bot/strategy.py:L310-L337, L538-L582` |
 | State / cooldown | `StrategyState` + flip cooldown logic | last exec bar + side | prevents immediate flip re-entry | `bot/strategy.py:L81-L87, L412-L435` |
 
 ## Inputs/Outputs (trader-facing)
 
 - **Inputs**:
-  - 1D features: `strategy.prepare_features_1d` expects OHLC and emits `hlc3`, `trend_ma`, `quality_ma`, `fast_sign/slow_sign`, `align`, etc. Evidence: `bot/strategy.py:L102-L216`.
+  - 1D features: `strategy.prepare_features_1d` expects OHLC and emits `hlc3`, `trend_ma`, `quality_ma`, `fast_sign_raw/fast_sign_eff/slow_sign`, `align`, etc. Evidence: `bot/strategy.py:L102-L216`.
   - Execution features: `strategy.prepare_features_exec` emits `exec_ma` for gating. Evidence: `bot/strategy.py:L219-L228`.
 - **Outputs**:
   - `strategy.decide` returns `desired_pos_frac`, `target_pos_frac`, `action`, `reason`, etc., consumed by backtest/live. Evidence: `bot/strategy.py:L353-L582`, consumer in `bot/backtest.py:L501-L605`.
@@ -173,7 +173,7 @@ flowchart TD
 
 ### Strategy Params（策略参数）
 
-- **趋势存在层**：`TREND_EXISTENCE`（indicator, window, ma_type, slope_k, timeframe）。证据：`bot/config.py:L110-L120` 与 `bot/strategy.py:L113-L127`。
+- **趋势存在层**：`TREND_EXISTENCE`（indicator, window, ma_type, slope_k, timeframe, fast_state_deadband_pct）。证据：`bot/config.py:L110-L124` 与 `bot/strategy.py:L113-L127`。
 - **趋势质量层/对齐**：`TREND_QUALITY` + `ANGLE_SIZING_*` + `VOL_*`。证据：`bot/config.py:L122-L170` 与 `bot/strategy.py:L129-L200`。
 - **方向模式**：`DIRECTION_MODE` 控制 long/short/both。证据：`bot/config.py:L158-L177` 与 `bot/strategy.py:L310-L325`。
 

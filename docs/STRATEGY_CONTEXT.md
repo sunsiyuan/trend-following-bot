@@ -4,8 +4,8 @@
 策略意图未在代码中明确声明；从命名与流程可推断为趋势跟随型框架，但此处不做额外假设，仅记录代码实现。  
 Strategy intent is not explicitly declared in code; names and flow suggest a trend-following framework, but no further assumptions are made here beyond the implementation.
 
-- 代码位置：bot/strategy.py::decide（关键变量：fast_sign, align, desired, target）  
-- Code location: bot/strategy.py::decide (key vars: fast_sign, align, desired, target)
+- 代码位置：bot/strategy.py::decide（关键变量：fast_sign_eff, align, desired, target）  
+- Code location: bot/strategy.py::decide (key vars: fast_sign_eff, align, desired, target)
 - 代码位置：bot/backtest.py::run_backtest_for_symbol（关键变量：target_frac, delta_notional, fee）  
 - Code location: bot/backtest.py::run_backtest_for_symbol (key vars: target_frac, delta_notional, fee)
 - 代码位置：bot/main.py::latest_decision_for_symbol（关键变量：df_1d_feat, df_ex_feat, decision）  
@@ -172,8 +172,10 @@ Alignment is defined on the MA/MA path as a tanh attenuation of slope mismatch p
 - Formula: fast_state = ln(hlc3) - ln(trend_ma)
 - 公式：slow_state = ln(hlc3) - ln(quality_ma)  
 - Formula: slow_state = ln(hlc3) - ln(quality_ma)
-- 公式：fast_sign = 1 if fast_state>0; -1 if fast_state<0; 0 if fast_state==0; NaN if fast_state is NaN  
-- Formula: fast_sign = 1 if fast_state>0; -1 if fast_state<0; 0 if fast_state==0; NaN if fast_state is NaN
+- 公式：fast_sign_raw = 1 if fast_state>0; -1 if fast_state<0; 0 if fast_state==0; NaN if fast_state is NaN  
+- Formula: fast_sign_raw = 1 if fast_state>0; -1 if fast_state<0; 0 if fast_state==0; NaN if fast_state is NaN
+- 公式：fast_sign_eff 使用 deadband + stickiness：eps = log1p(fast_state_deadband_pct)，|fast_state|<eps 时保持 prev，否则等于 fast_sign_raw  
+- Formula: fast_sign_eff applies deadband + stickiness: eps = log1p(fast_state_deadband_pct); keep prev when |fast_state|<eps, else fast_sign_raw
 - 公式：slow_sign = 1 if slow_state>0; -1 if slow_state<0; 0 if slow_state==0; NaN if slow_state is NaN  
 - Formula: slow_sign = 1 if slow_state>0; -1 if slow_state<0; 0 if slow_state==0; NaN if slow_state is NaN
 - 公式：z_dir = slow_sign * z  
@@ -184,11 +186,11 @@ Alignment is defined on the MA/MA path as a tanh attenuation of slope mismatch p
 - Formula: penalty_q = floor(penalty/ANGLE_SIZING_Q) * ANGLE_SIZING_Q
 - 公式：align = 1 - tanh(penalty_q/ANGLE_SIZING_A); align = clip(align, 0, 1)  
 - Formula: align = 1 - tanh(penalty_q/ANGLE_SIZING_A); align = clip(align, 0, 1)
-- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：delta, sigma_mismatch_mean, z, zq, fast_state, slow_state, fast_sign, slow_sign, align）  
-- Code location: bot/strategy.py::prepare_features_1d (key vars: delta, sigma_mismatch_mean, z, zq, fast_state, slow_state, fast_sign, slow_sign, align)
+- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：delta, sigma_mismatch_mean, z, zq, fast_state, slow_state, fast_sign_raw, fast_sign_eff, slow_sign, align）  
+- Code location: bot/strategy.py::prepare_features_1d (key vars: delta, sigma_mismatch_mean, z, zq, fast_state, slow_state, fast_sign_raw, fast_sign_eff, slow_sign, align)
 
-NaN覆盖条件（满足任一则align=1.0）：hlc3, trend_ma, quality_ma, trend_log_slope, quality_log_slope, sigma_price, sigma_mismatch_mean, z, fast_state, slow_state, fast_sign, slow_sign。  
-NaN override conditions (any triggers align=1.0): hlc3, trend_ma, quality_ma, trend_log_slope, quality_log_slope, sigma_price, sigma_mismatch_mean, z, fast_state, slow_state, fast_sign, slow_sign.
+NaN覆盖条件（满足任一则align=1.0）：hlc3, trend_ma, quality_ma, trend_log_slope, quality_log_slope, sigma_price, sigma_mismatch_mean, z, fast_state, slow_state, fast_sign_eff, slow_sign。  
+NaN override conditions (any triggers align=1.0): hlc3, trend_ma, quality_ma, trend_log_slope, quality_log_slope, sigma_price, sigma_mismatch_mean, z, fast_state, slow_state, fast_sign_eff, slow_sign.
 
 - 代码位置：bot/strategy.py::prepare_features_1d（关键变量：nan_mask, align）  
 - Code location: bot/strategy.py::prepare_features_1d (key vars: nan_mask, align)
@@ -196,17 +198,17 @@ NaN override conditions (any triggers align=1.0): hlc3, trend_ma, quality_ma, tr
 若趋势存在或质量不为MA，则上述align链条不计算，相关字段设为NaN且align强制为1.0。  
 If trend existence or quality is not MA-based, the align chain is skipped, related fields are NaN, and align is forced to 1.0.
 
-- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：align, z, fast_sign）  
-- Code location: bot/strategy.py::prepare_features_1d (key vars: align, z, fast_sign)
+- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：align, z, fast_sign_eff）  
+- Code location: bot/strategy.py::prepare_features_1d (key vars: align, z, fast_sign_eff)
 
 ## 趋势方向与状态 / Trend Direction & State
-趋势方向（实际用于仓位方向）由fast_sign决定；fast_sign来源于fast_state的符号，market_state在决策中等于fast_dir。  
-Trend direction (used for position direction) is decided by fast_sign; fast_sign comes from the sign of fast_state, and market_state is set to fast_dir in decision logic.
+趋势方向（实际用于仓位方向）由fast_sign_eff决定；fast_sign_eff源于fast_sign_raw并应用deadband+stickiness。market_state在决策中等于fast_dir。  
+Trend direction (used for position direction) is decided by fast_sign_eff; fast_sign_eff is derived from fast_sign_raw with deadband+stickiness. market_state is set to fast_dir in decision logic.
 
-- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：fast_state, fast_sign）  
-- Code location: bot/strategy.py::prepare_features_1d (key vars: fast_state, fast_sign)
-- 代码位置：bot/strategy.py::decide（关键变量：fast_sign, fast_dir, market_state）  
-- Code location: bot/strategy.py::decide (key vars: fast_sign, fast_dir, market_state)
+- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：fast_state, fast_sign_raw, fast_sign_eff, fast_deadband_active）  
+- Code location: bot/strategy.py::prepare_features_1d (key vars: fast_state, fast_sign_raw, fast_sign_eff, fast_deadband_active)
+- 代码位置：bot/strategy.py::decide（关键变量：fast_sign_eff, fast_dir, market_state）  
+- Code location: bot/strategy.py::decide (key vars: fast_sign_eff, fast_dir, market_state)
 
 趋势存在方向（raw_dir）由trend_log_slope或Donchian上下轨决定，作为诊断记录；slow_sign/slow_dir来自quality_ma的log_slope。  
 Trend-existence direction (raw_dir) is determined by trend_log_slope or Donchian bands and used for diagnostics; slow_sign/slow_dir come from quality_ma log_slope.
@@ -223,21 +225,21 @@ The meaning of “fast/slow” in code is only reflected as two MA windows and t
 - Code location: bot/strategy.py::prepare_features_1d (key vars: trend_ma, quality_ma)
 
 ## 仓位生成 / Position Targeting
-目标仓位分数由fast_sign与align决定，并受方向模式限制；方向模式先生成 desired_raw，再做按符号缩放。  
-Target position fraction is derived from fast_sign and align with direction mode constraints; direction mode produces desired_raw first, then applies sign-based scaling.
+目标仓位分数由fast_sign_eff与align决定，并受方向模式限制；方向模式先生成 desired_raw，再做按符号缩放。  
+Target position fraction is derived from fast_sign_eff and align with direction mode constraints; direction mode produces desired_raw first, then applies sign-based scaling.
 
-- 公式：desired_raw = 0 if fast_sign is NaN or 0  
-- Formula: desired_raw = 0 if fast_sign is NaN or 0
-- 公式（both_side）：desired_raw = fast_sign * align  
-- Formula (both_side): desired_raw = fast_sign * align
-- 公式（long_only）：desired_raw = align if fast_sign>0 else 0  
-- Formula (long_only): desired_raw = align if fast_sign>0 else 0
-- 公式（short_only）：desired_raw = -align if fast_sign<0 else 0  
-- Formula (short_only): desired_raw = -align if fast_sign<0 else 0
+- 公式：desired_raw = 0 if fast_sign_eff is NaN or 0  
+- Formula: desired_raw = 0 if fast_sign_eff is NaN or 0
+- 公式（both_side）：desired_raw = fast_sign_eff * align  
+- Formula (both_side): desired_raw = fast_sign_eff * align
+- 公式（long_only）：desired_raw = align if fast_sign_eff>0 else 0  
+- Formula (long_only): desired_raw = align if fast_sign_eff>0 else 0
+- 公式（short_only）：desired_raw = -align if fast_sign_eff<0 else 0  
+- Formula (short_only): desired_raw = -align if fast_sign_eff<0 else 0
 - 公式（sign scaling）：desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0  
 - Formula (sign scaling): desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0
-- 代码位置：bot/strategy.py::compute_desired_target_frac（关键变量：fast_sign, align, direction_mode）  
-- Code location: bot/strategy.py::compute_desired_target_frac (key vars: fast_sign, align, direction_mode)
+- 代码位置：bot/strategy.py::compute_desired_target_frac（关键变量：fast_sign_eff, align, direction_mode）  
+- Code location: bot/strategy.py::compute_desired_target_frac (key vars: fast_sign_eff, align, direction_mode)
 
 目标值在执行层被平滑：每次最多改变max_delta，且构建/减仓使用不同max_delta。  
 Targets are smoothed at execution: each step changes by at most max_delta, with different max_delta for build vs reduction.
@@ -338,8 +340,8 @@ rank_runs pct_days_* metrics come from summary.json (pct_in_position/pct_long/pc
 - Code location: bot/rank_runs.py::_compute_profile_metrics (key fields: pct_days_in_position/pct_days_long/pct_days_short)
 
 ## 已知限制与未决问题 / Known Limitations & Open Questions
-未在策略逻辑中使用的配置项：neutral_band_pct在TREND_QUALITY中定义，但代码未读取或应用。  
-Unused config in strategy logic: neutral_band_pct is defined in TREND_QUALITY but is not read or applied in code.
+未在策略逻辑中使用的配置项：neutral_band_pct在TREND_QUALITY中定义，但代码未读取或应用（趋势存在层已使用fast_state_deadband_pct）。  
+Unused config in strategy logic: neutral_band_pct is defined in TREND_QUALITY but is not read or applied (trend existence uses fast_state_deadband_pct).
 
 - 代码位置：bot/config.py::TREND_QUALITY（关键变量：neutral_band_pct）  
 - Code location: bot/config.py::TREND_QUALITY (key vars: neutral_band_pct)
