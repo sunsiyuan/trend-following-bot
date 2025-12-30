@@ -115,17 +115,17 @@ class ExecutionCfg(TypedDict):
 TREND_EXISTENCE: TrendExistenceCfg = {
     "indicator": "ma",  # "ma" or "donchian"
     "timeframe": TIMEFRAMES["trend"],
-    "window": 15,
+    "window": 20,
     "ma_type": "ema",
     "slope_k": 3,
-    "fast_state_deadband_pct": 0.0,
+    "fast_state_deadband_pct": 0.0025,
 }
 
 # 趋势质量层默认：MA(1d, 50) + neutral band（当前未使用）
 TREND_QUALITY: TrendQualityCfg = {
     "indicator": "ma",
     "timeframe": TIMEFRAMES["trend"],
-    "window": 50,             # e.g. 50 or 90（50 更灵敏；90 更慢更稳）
+    "window": 30,             # e.g. 50 or 90（50 更灵敏；90 更慢更稳）
     "neutral_band_pct": 0.025, # +/-1% band around MA
 }
 
@@ -141,7 +141,7 @@ EXECUTION: ExecutionCfg = {
     "slope_k": 1,
 
     # 加仓：更谨慎（减少追高/噪声），所以冷却更长、单次幅度更小
-    "build_min_step_bars": 2,       # e.g. 3 bars on 4h => 12 hours（注：这里是 2 => 8h）
+    "build_min_step_bars": 1,       # e.g. 3 bars on 4h => 12 hours（注：这里是 2 => 8h）
     "build_max_delta_frac": 0.5,   # <=25% of full target per exec
 
     # 减仓：更果断（避免回撤扩大），所以允许更快更大
@@ -173,7 +173,7 @@ def vol_window_from_fast_window(w_fast: int) -> int:
 # - long_only 会天然提升表现（因为长期上行偏置），但这不是“纯趋势策略的普适性证明”
 # - both_side 才能检验“熊市/反转期是否能保护回撤”
 # - 所以：你可以先 long_only 把暴露问题调顺，再切 both_side 验证稳健性
-DIRECTION_MODE: DirectionMode = "both_side"
+DIRECTION_MODE: DirectionMode = "long_only"
 
 # 目标仓位缩放系数（按方向符号）
 # - 多头保持 1.0，空头更保守（整体打折，而非只做上限裁剪）
