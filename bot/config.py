@@ -188,6 +188,9 @@ MAX_SHORT_FRAC: float = 0.25
 # 单标的起始资金（如果多 symbol，你的回测会按 symbol 分开跑或合并跑，取决于 backtest 实现）
 STARTING_CASH_USDC_PER_SYMBOL: float = 10_000.0
 
+# 执行噪音阈值：当目标仓位变化对应的名义金额低于该比例时，不产生交易意图。
+MIN_TRADE_NOTIONAL_PCT: float = 0.05
+
 # 手续费（bps）
 # 强烈建议尽早填真实值，不然 trade_count 很高时，回测会严重乐观
 # 调参思路：先用 taker 费率做 worst-case，再考虑 maker/滑点模型
