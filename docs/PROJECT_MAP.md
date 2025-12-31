@@ -23,6 +23,7 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 │  ├─ data_client.py             # 数据下载/缓存/读取（Hyperliquid candleSnapshot）
 │  ├─ indicators.py              # 指标计算（MA、Donchian、log_slope、hlc3 等）
 │  ├─ metrics.py                 # 回测指标计算（收益、回撤、Sharpe、Ulcer 等）
+│  ├─ param_sweep.py             # 参数扫描工具（从 JSON 读取参数组合，批量运行回测）
 │  ├─ quarterly_stats.py         # 按季度统计（基于 equity/trades 输出）
 │  ├─ rank_runs.py               # 回测结果排名/对比（runs.jsonl -> backtest_rank）
 │  ├─ strategy.py                # 策略逻辑（特征计算 + 决策）
@@ -48,6 +49,7 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 │  ├─ data_client.py             # Data download/cache/read (Hyperliquid)
 │  ├─ indicators.py              # Indicator math helpers
 │  ├─ metrics.py                 # Backtest performance metrics
+│  ├─ param_sweep.py             # Parameter sweep tool (read param combos from JSON, batch run backtests)
 │  ├─ quarterly_stats.py         # Quarterly stats export
 │  ├─ rank_runs.py               # Backtest run ranking (runs.jsonl -> backtest_rank)
 │  ├─ strategy.py                # Strategy features + decision logic
@@ -64,9 +66,10 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 **中文**
 
-- **实际 CLI 入口**：`bot/backtest.py` 内的 `main()` 使用 `argparse` 定义 `--start/--end/--symbols/--run_id` 并在 `__main__` 下执行，因此实际运行入口为模块 `bot.backtest`（如 `python -m bot.backtest ...`）。证据：`main()` 与 `if __name__ == "__main__":`（`bot/backtest.py:L918-L967`）。
-- **可调用核心入口**：`run_backtest(symbols, start, end, params, run_id=None)` 是可 import 的回测入口，返回 run 级别结果并追加 runs.jsonl。证据：`bot/backtest.py:L388-L536`。
-- **主流程**：`main()` 解析参数 → 组装 `BacktestParams` → 调用 `run_backtest`；当传入多个 symbols 时，每个 symbol 会生成独立的 run_id/run_dir 并各自写入 `config_snapshot.json` 与 `summary_all.json`。证据：`bot/backtest.py:L918-L980`。
+- **实际 CLI 入口**：`bot/backtest.py` 内的 `main()` 使用 `argparse` 定义 `--start/--end/--symbols/--run_id` 并在 `__main__` 下执行，因此实际运行入口为模块 `bot.backtest`（如 `python -m bot.backtest ...`）。证据：`main()` 与 `if __name__ == "__main__":`（`bot/backtest.py:L1052-L1108`）。
+- **参数扫描入口**：`bot/param_sweep.py` 提供 `main()` 函数，支持从 JSON 文件读取参数组合（显式格式 base+sweep 或隐式格式列表值），自动生成参数叉乘并批量调用 `run_backtest`。证据：`bot/param_sweep.py:L1-L280`。
+- **可调用核心入口**：`run_backtest(symbols, start, end, params, run_id=None)` 是可 import 的回测入口，返回 run 级别结果并追加 runs.jsonl。证据：`bot/backtest.py:L402-L641`。
+- **主流程**：`main()` 解析参数 → 组装 `BacktestParams` → 调用 `run_backtest`；当传入多个 symbols 时，每个 symbol 会生成独立的 run_id/run_dir 并各自写入 `config_snapshot.json` 与 `summary_all.json`。证据：`bot/backtest.py:L1052-L1108`。
 - **数据读取**：`run_backtest_for_symbol` 调用 `data_client.ensure_market_data` 拉取/加载趋势与执行时间框架数据（含缓存下载）。证据：`bot/backtest.py:L345-L365` 与 `bot/data_client.py:L308-L394`。
 - **策略/信号计算**：特征计算通过 `strategy.prepare_features_1d` 与 `strategy.prepare_features_exec`，决策通过 `strategy.decide`。证据：`bot/backtest.py:L369-L507`、`bot/strategy.py:L102-L228, L353-L582`。
 - **模拟执行/撮合**：回测内用 cash + position 模型更新仓位与费用，按执行 bar 迭代。证据：仓位/费用更新与 trade 记录写入（`bot/backtest.py:L488-L605`）。
@@ -75,9 +78,10 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 **English**
 
-- **CLI entry**: `bot/backtest.py` defines `main()` with `argparse` arguments (`--start/--end/--symbols/--run_id`) and runs it under `__main__`, so the runnable entry is module `bot.backtest` (e.g., `python -m bot.backtest ...`). Evidence: `main()` + `if __name__ == "__main__"` (`bot/backtest.py:L918-L967`).
-- **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is the importable backtest entrypoint and appends runs.jsonl. Evidence: `bot/backtest.py:L388-L536`.
-- **Main flow**: `main()` parses args → builds `BacktestParams` → calls `run_backtest`; when multiple symbols are provided, each symbol produces its own run_id/run_dir and its own `config_snapshot.json` and `summary_all.json`. Evidence: `bot/backtest.py:L918-L980`.
+- **CLI entry**: `bot/backtest.py` defines `main()` with `argparse` arguments (`--start/--end/--symbols/--run_id`) and runs it under `__main__`, so the runnable entry is module `bot.backtest` (e.g., `python -m bot.backtest ...`). Evidence: `main()` + `if __name__ == "__main__"` (`bot/backtest.py:L1052-L1108`).
+- **Parameter sweep entry**: `bot/param_sweep.py` provides `main()` function that reads parameter combinations from JSON (explicit base+sweep format or implicit list values), generates Cartesian product, and batch calls `run_backtest`. Evidence: `bot/param_sweep.py:L1-L280`。
+- **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is the importable backtest entrypoint and appends runs.jsonl. Evidence: `bot/backtest.py:L402-L641`.
+- **Main flow**: `main()` parses args → builds `BacktestParams` → calls `run_backtest`; when multiple symbols are provided, each symbol produces its own run_id/run_dir and its own `config_snapshot.json` and `summary_all.json`. Evidence: `bot/backtest.py:L1052-L1108`.
 - **Data read**: `run_backtest_for_symbol` calls `data_client.ensure_market_data` for trend/execution timeframes (cache + download). Evidence: `bot/backtest.py:L345-L365` and `bot/data_client.py:L308-L394`.
 - **Strategy/signal**: features via `strategy.prepare_features_1d` & `strategy.prepare_features_exec`, decisions via `strategy.decide`. Evidence: `bot/backtest.py:L369-L507`, `bot/strategy.py:L102-L228, L353-L582`.
 - **Execution simulation**: cash + position model updated per execution bar, including fees and trade records. Evidence: `bot/backtest.py:L488-L605`.
@@ -206,8 +210,9 @@ flowchart TD
 
 ## Parameter sources (types)
 
-- **Config constants**: centralized in `bot/config.py` (symbols/timeframes/layer params/fees/paths). Evidence: `bot/config.py:L23-L219`.
-- **CLI args**: backtest `argparse` provides `--start/--end/--symbols/--run_id`. Evidence: `bot/backtest.py:L725-L754`.
+- **Config constants**: centralized in `bot/config.py` (symbols/timeframes/layer params/fees/paths). Evidence: `bot/config.py:L23-L230`.
+- **CLI args**: backtest `argparse` provides `--start/--end/--symbols/--run_id`. Evidence: `bot/backtest.py:L1052-L1108`. Parameter sweep `argparse` provides `--params/--start/--end/--symbols/--overwrite`. Evidence: `bot/param_sweep.py:L245-L280`.
+- **JSON parameter files**: `param_sweep.py` supports reading parameter combinations from JSON files with explicit (base+sweep) or implicit (list values) formats, generating Cartesian product of parameter combinations. Evidence: `bot/param_sweep.py:L30-L120`.
 - **Environment variables**: none found under `bot/` (searched `os.environ/getenv`, no hits). Evidence: `rg -n "os\.environ|getenv" bot` returned no matches.
 - **Defaults / hardcoded thresholds**: epsilon thresholds and numeric cutoffs inside strategy/backtest (e.g., `1e-9`, `1e-12`) affect decisions and position logic. Evidence: `bot/strategy.py:L339-L350, L377-L440`; `bot/backtest.py:L320-L341, L389-L392`.
 
