@@ -1,0 +1,12 @@
+[
+  {
+    "trend_existence": {
+      "window": 20
+    }
+  },
+  {
+    "trend_existence": {
+      "window": 30
+    }
+  }
+]

@@ -1,5 +1,12 @@
 # Documentation Versions
 
+## v12 - Param sweep main-process runs index writes
+
+- backtest: add `write_run_index` toggle so workers can return run index records without writing runs.jsonl.
+- param_sweep: use `as_completed` aggregation to upsert runs.jsonl only in the main process (workers never write the index).
+- tests: add parallel sweep coverage to assert runs.jsonl includes all run IDs and index writes happen in the main aggregation loop.
+- docs: document main-process runs.jsonl writes during parallel sweeps.
+
 ## v11 - Backtest index self-heal on skipped runs
 
 - backtest_store: add runs.jsonl upsert with malformed-line tolerance and atomic write.

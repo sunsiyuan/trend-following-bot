@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import List, Dict, Any, Tuple
 
 from bot import backtest
+from bot import backtest_store
 from bot.backtest_params import BacktestParams
 from bot import config
 
@@ -204,21 +205,38 @@ def _run_single_backtest(args_tuple: Tuple[int, Dict[str, Any], List[str], str, 
     """
     idx, param_dict, symbols, start, end, overwrite = args_tuple
     
-    # Merge with defaults to ensure complete params
-    complete_params = merge_with_defaults(param_dict)
-    params = BacktestParams.from_dict(complete_params)
-    
-    # Run backtest
-    result = backtest.run_backtest(
-        symbols,
-        start,
-        end,
-        params,
-        run_id=None,  # Use deterministic run_id based on param_hash
-        overwrite=overwrite,
-    )
-    
-    return result
+    try:
+        # Merge with defaults to ensure complete params
+        complete_params = merge_with_defaults(param_dict)
+        params = BacktestParams.from_dict(complete_params)
+
+        # Run backtest (workers never write runs.jsonl)
+        result = backtest.run_backtest(
+            symbols,
+            start,
+            end,
+            params,
+            run_id=None,  # Use deterministic run_id based on param_hash
+            overwrite=overwrite,
+            write_run_index=False,
+        )
+        return {
+            "ok": True,
+            "run_id": result.get("run_id"),
+            "run_index_record": result.get("run_index_record"),
+            "error": None,
+            "result": result,
+            "param_index": idx,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "run_id": None,
+            "run_index_record": None,
+            "error": str(exc),
+            "result": None,
+            "param_index": idx,
+        }
 
 
 def run_param_sweep(
@@ -252,101 +270,90 @@ def run_param_sweep(
     
     if isinstance(symbols, str):
         symbols = [s.strip() for s in symbols.split(",") if s.strip()]
-    
-    if workers == 1:
-        # Sequential execution (original behavior)
-        results = []
-        for idx, param_dict in enumerate(param_list):
-            # Merge with defaults to ensure complete params
-            complete_params = merge_with_defaults(param_dict)
-            
-            log.info("=" * 80)
-            log.info("Running parameter set %d/%d", idx + 1, len(param_list))
-            
-            # Show only non-default values for clarity
-            default_params = merge_with_defaults({})
-            diff_params = {}
-            for k, v in complete_params.items():
-                if k == "schema_version":
-                    continue
-                default_v = default_params.get(k)
-                if v != default_v:
-                    if isinstance(v, dict) and isinstance(default_v, dict):
-                        # Compare nested dicts
-                        if json.dumps(v, sort_keys=True) != json.dumps(default_v, sort_keys=True):
-                            diff_params[k] = v
-                    else:
+
+    if workers < 1:
+        raise ValueError(f"workers must be >= 1, got {workers}")
+
+    runs_jsonl_path = Path(config.BACKTEST_RESULT_DIR) / "runs.jsonl"
+    results_dict: Dict[int, Dict[str, Any]] = {}
+    completed_count = 0
+
+    def _log_params(idx: int, param_dict: Dict[str, Any]) -> None:
+        complete_params = merge_with_defaults(param_dict)
+        log.info("=" * 80)
+        log.info("Running parameter set %d/%d", idx + 1, len(param_list))
+
+        default_params = merge_with_defaults({})
+        diff_params = {}
+        for k, v in complete_params.items():
+            if k == "schema_version":
+                continue
+            default_v = default_params.get(k)
+            if v != default_v:
+                if isinstance(v, dict) and isinstance(default_v, dict):
+                    if json.dumps(v, sort_keys=True) != json.dumps(default_v, sort_keys=True):
                         diff_params[k] = v
-            
-            if diff_params:
-                log.info("Params (non-defaults): %s", json.dumps(diff_params, indent=2, ensure_ascii=False))
-            
-            params = BacktestParams.from_dict(complete_params)
-            result = backtest.run_backtest(
-                symbols,
-                start,
-                end,
-                params,
-                run_id=None,  # Use deterministic run_id based on param_hash
-                overwrite=overwrite,
-            )
-            results.append(result)
-            
+                else:
+                    diff_params[k] = v
+
+        if diff_params:
+            log.info("Params (non-defaults): %s", json.dumps(diff_params, indent=2, ensure_ascii=False))
+
+    def _handle_worker_result(worker_result: Dict[str, Any], idx: int) -> None:
+        nonlocal completed_count
+        completed_count += 1
+        if worker_result.get("ok"):
+            result = worker_result.get("result") or {}
+            record = worker_result.get("run_index_record")
+            if record:
+                backtest_store.upsert_run_index_record(runs_jsonl_path, record)
+            results_dict[idx] = result
             if result.get("status") == "skipped":
-                log.info("Run skipped (already exists): %s", result.get("run_id"))
+                log.info("[%d/%d] Run skipped (already exists): %s",
+                         completed_count, len(param_list), result.get("run_id"))
             else:
-                log.info("Run completed: %s", result.get("run_id"))
-        
-        return results
-    else:
-        # Parallel execution
-        if workers < 1:
-            raise ValueError(f"workers must be >= 1, got {workers}")
-        
-        log.info("Running with %d parallel workers", workers)
-        
-        # Prepare tasks
-        tasks = [
-            (idx, param_dict, symbols, start, end, overwrite)
-            for idx, param_dict in enumerate(param_list)
-        ]
-        
-        # Execute in parallel
-        results_dict = {}
-        completed_count = 0
-        
-        with ProcessPoolExecutor(max_workers=workers) as executor:
-            # Submit all tasks
-            future_to_idx = {
-                executor.submit(_run_single_backtest, task): idx
-                for idx, task in enumerate(tasks)
+                log.info("[%d/%d] Run completed: %s",
+                         completed_count, len(param_list), result.get("run_id"))
+        else:
+            log.error(
+                "[%d/%d] Run failed with exception: %s",
+                idx + 1,
+                len(param_list),
+                worker_result.get("error"),
+            )
+            results_dict[idx] = {
+                "status": "failed",
+                "error": worker_result.get("error"),
+                "param_index": idx,
             }
-            
-            # Collect results as they complete
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    result = future.result()
-                    results_dict[idx] = result
-                    completed_count += 1
-                    
-                    if result.get("status") == "skipped":
-                        log.info("[%d/%d] Run skipped (already exists): %s", 
-                                completed_count, len(param_list), result.get("run_id"))
-                    else:
-                        log.info("[%d/%d] Run completed: %s", 
-                                completed_count, len(param_list), result.get("run_id"))
-                except Exception as exc:
-                    log.error("[%d/%d] Run failed with exception: %s", idx + 1, len(param_list), exc)
-                    results_dict[idx] = {
-                        "status": "failed",
-                        "error": str(exc),
-                        "param_index": idx,
-                    }
-        
-        # Return results in original order
-        results = [results_dict[i] for i in range(len(param_list))]
-        return results
+
+    if workers == 1:
+        for idx, param_dict in enumerate(param_list):
+            _log_params(idx, param_dict)
+            worker_result = _run_single_backtest(
+                (idx, param_dict, symbols, start, end, overwrite)
+            )
+            _handle_worker_result(worker_result, idx)
+        return [results_dict[i] for i in range(len(param_list))]
+
+    log.info("Running with %d parallel workers", workers)
+
+    tasks = [
+        (idx, param_dict, symbols, start, end, overwrite)
+        for idx, param_dict in enumerate(param_list)
+    ]
+
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        future_to_idx = {
+            executor.submit(_run_single_backtest, task): idx
+            for idx, task in enumerate(tasks)
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            worker_result = future.result()
+            _handle_worker_result(worker_result, idx)
+
+    return [results_dict[i] for i in range(len(param_list))]
 
 
 def main():
@@ -380,4 +387,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
