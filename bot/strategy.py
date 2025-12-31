@@ -26,7 +26,7 @@ import pandas as pd
 from bot import config
 from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
-STRATEGY_VERSION = "v2"
+STRATEGY_VERSION = "v3"
 # NOTE: Any structural strategy change (components added/removed, signal definitions,
 # or position-sizing logic changes) must bump STRATEGY_VERSION.
 
@@ -50,6 +50,9 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "s_fast": None,
     "s_slow": None,
     "align": None,
+    "fast_state_deadband_pct": None,
+    "deadband_conf": None,
+    "deadband_active": None,
     "sigma_price": None,
     "sigma_mismatch_mean": None,
     "z": None,
@@ -117,6 +120,22 @@ def _vol_window_from_fast_window(
     n = int(round(w_fast / vol_window_div))
     return max(vol_window_min, min(vol_window_max, n))
 
+def compute_deadband_conf(
+    fast_state: pd.Series,
+    deadband_pct: float,
+) -> tuple[pd.Series, pd.Series]:
+    deadband_pct = float(deadband_pct)
+    if np.isnan(deadband_pct) or deadband_pct <= 0:
+        conf = pd.Series(1.0, index=fast_state.index)
+        active = pd.Series(False, index=fast_state.index)
+        return conf, active
+    eps = np.log1p(deadband_pct)
+    abs_fast = fast_state.abs()
+    conf = (abs_fast / eps).clip(lower=0.0, upper=1.0)
+    conf = conf.where(~fast_state.isna(), 1.0)
+    active = (abs_fast < eps) & fast_state.notna()
+    return conf, active
+
 def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.DataFrame:
     """
     Adds columns needed for 1D decisions, based on config.
@@ -130,6 +149,8 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
     price_series = out["hlc3"]
     # Trend existence
     te = config.TREND_EXISTENCE
+    if params is not None:
+        te = getattr(params, "trend_existence", te) or te
     if te["indicator"] == "ma":
         ma_type = te.get("ma_type", "sma")
         slope_k = int(te.get("slope_k", 2))
@@ -238,6 +259,11 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         out["penalty_q"] = np.nan
         # Default align to 1.0 when angle sizing inputs are absent.
         out["align"] = 1.0
+    deadband_pct = float(te.get("fast_state_deadband_pct", 0.0))
+    deadband_conf, deadband_active = compute_deadband_conf(out["fast_state"], deadband_pct)
+    out["fast_state_deadband_pct"] = deadband_pct
+    out["deadband_conf"] = deadband_conf
+    out["deadband_active"] = deadband_active
     return out
 
 def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
@@ -335,6 +361,7 @@ def compute_desired_target_frac(
     fast_sign: float,
     align: float,
     direction_mode: DirectionMode,
+    deadband_conf: float = 1.0,
 ) -> float:
     def apply_pos_scale(desired_raw: float, max_long_frac: float, max_short_frac: float) -> float:
         if desired_raw > 0:
@@ -345,16 +372,23 @@ def compute_desired_target_frac(
 
     # Convert directional sign (+1/-1/0) and alignment scalar into target fraction.
     align = float(np.clip(align, 0.0, 1.0))
+    deadband_conf = float(deadband_conf)
+    if np.isnan(deadband_conf):
+        deadband_conf = 1.0
+    deadband_conf = float(np.clip(deadband_conf, 0.0, 1.0))
     if np.isnan(fast_sign) or fast_sign == 0:
         return 0.0
     if direction_mode == "both_side":
         desired_raw = float(fast_sign) * align
+        desired_raw *= deadband_conf
         return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
     if direction_mode == "long_only":
         desired_raw = align if fast_sign > 0 else 0.0
+        desired_raw *= deadband_conf
         return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
     if direction_mode == "short_only":
         desired_raw = -align if fast_sign < 0 else 0.0
+        desired_raw *= deadband_conf
         return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
     return 0.0
 
@@ -443,7 +477,15 @@ def decide(
     # align is an attenuation factor; if disabled, force align=1.0.
     angle_sizing_enabled = bool(_risk_value(params, "angle_sizing_enabled", config.ANGLE_SIZING_ENABLED))
     align = float(row_1d.get("align", 1.0)) if angle_sizing_enabled else 1.0
-    desired = compute_desired_target_frac(fast_sign, align, config.DIRECTION_MODE)
+    deadband_conf = float(row_1d.get("deadband_conf", 1.0))
+    desired = compute_desired_target_frac(
+        fast_sign,
+        align,
+        config.DIRECTION_MODE,
+        deadband_conf=deadband_conf,
+    )
+    deadband_active = bool(row_1d.get("deadband_active", False))
+    fast_state_deadband_pct = row_1d.get("fast_state_deadband_pct")
 
     # Stage D: apply flip cooldown logic.
     current_side = _side_from_frac(current)
@@ -490,6 +532,9 @@ def decide(
             s_fast=row_1d.get("trend_log_slope"),
             s_slow=row_1d.get("quality_log_slope"),
             align=align,
+            fast_state_deadband_pct=fast_state_deadband_pct,
+            deadband_conf=deadband_conf,
+            deadband_active=deadband_active,
             sigma_price=row_1d.get("sigma_price"),
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
@@ -554,6 +599,9 @@ def decide(
             s_fast=row_1d.get("trend_log_slope"),
             s_slow=row_1d.get("quality_log_slope"),
             align=align,
+            fast_state_deadband_pct=fast_state_deadband_pct,
+            deadband_conf=deadband_conf,
+            deadband_active=deadband_active,
             sigma_price=row_1d.get("sigma_price"),
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
@@ -600,6 +648,9 @@ def decide(
         s_fast=row_1d.get("trend_log_slope"),
         s_slow=row_1d.get("quality_log_slope"),
         align=align,
+        fast_state_deadband_pct=fast_state_deadband_pct,
+        deadband_conf=deadband_conf,
+        deadband_active=deadband_active,
         sigma_price=row_1d.get("sigma_price"),
         sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
         z=row_1d.get("z"),
