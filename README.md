@@ -21,10 +21,53 @@ pip install -r requirements.txt
 
 ## Backtest
 
+### Single Run
+
 Example:
 
 ```bash
-python -m hypervault.backtest --start 2024-01-01 --end 2025-12-20 --symbols BTC,ETH
+python -m bot.backtest --start 2024-01-01 --end 2025-12-20 --symbols BTC,ETH
+```
+
+### Parameter Sweep
+
+Run multiple parameter combinations from a JSON file with automatic Cartesian product:
+
+```bash
+# Sequential execution (default)
+python -m bot.param_sweep --params param.json --start 2024-01-01 --end 2025-12-20 --symbols ETH
+
+# Parallel execution (8 workers)
+python -m bot.param_sweep --params param.json --start 2024-01-01 --end 2025-12-20 --symbols ETH --workers 8
+```
+
+Parameter file formats:
+
+**Explicit format** (base + sweep):
+```json
+{
+  "base": {
+    "trend_existence": {"ma_type": "ema", "slope_k": 3},
+    "trend_quality": {"neutral_band_pct": 0.025}
+  },
+  "sweep": {
+    "trend_existence.window": [18, 20, 25, 30],
+    "trend_quality.window": [28, 32, 40]
+  }
+}
+```
+
+**Implicit format** (list values in nested dicts):
+```json
+{
+  "trend_existence": {
+    "window": [18, 20, 25, 30],
+    "ma_type": "ema"
+  },
+  "trend_quality": {
+    "window": [28, 32, 40]
+  }
+}
 ```
 
 Outputs:
