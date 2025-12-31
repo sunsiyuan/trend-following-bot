@@ -1,5 +1,12 @@
 # Documentation Versions
 
+## v11 - Backtest index self-heal on skipped runs
+
+- backtest_store: add runs.jsonl upsert with malformed-line tolerance and atomic write.
+- backtest: when run_dir matches existing fingerprints, skip recomputation but upsert the run index.
+- tests: cover runs.jsonl create/append/replace and malformed line handling.
+- docs: document skipped-run index healing in PROJECT_MAP.md and STRATEGY_CONTEXT.md.
+
 ## v10 - Parameter sweep parallel execution
 
 - param_sweep: add `--workers` argument for multi-process parallel execution to accelerate large-scale parameter sweeps.

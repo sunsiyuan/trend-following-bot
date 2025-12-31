@@ -42,6 +42,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **risk sizing 参数注入**：`BacktestParams` 注入 `angle_sizing_*` 与 `vol_*` 到策略特征/对齐逻辑，并参与 `param_hash`，保证可复现。  
 - **strategy_version**：`bot/strategy.py` 定义 `STRATEGY_VERSION` 作为结构性变更护栏，并进入 `param_hash`；任何结构件增删、信号定义变更、仓位函数变更都必须 bump。  
 - **run_id 格式**：默认 `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`，CLI 可用 `--run_id` 覆盖。  
+- **skipped 索引自愈**：当 run_dir 已存在且参数/数据指纹一致时，回测不会重跑但仍会 upsert `runs.jsonl`，确保索引可被排名脚本使用。  
 
 **English**
 
@@ -51,6 +52,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **Risk sizing injection**: `BacktestParams` injects `angle_sizing_*` and `vol_*` into feature/alignment logic and includes them in `param_hash` for reproducibility.  
 - **strategy_version**: `STRATEGY_VERSION` in `bot/strategy.py` is a structural-change guardrail and is included in `param_hash`; bump it when components/signals/position sizing change.  
 - **run_id format**: default is `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`, overridable via CLI `--run_id`.  
+- **Skipped index heal**: when the run_dir already exists with matching fingerprints, backtest skips recomputation but still upserts `runs.jsonl` so ranking can rely on the index.  
 
 ## Evaluation Layer Contract / 评价层契约
 
