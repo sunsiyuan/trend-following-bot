@@ -156,43 +156,6 @@ def load_param_sweep_config(config_path: Path) -> List[Dict[str, Any]]:
         raise ValueError(f"Invalid param.json format: expected dict, list of dicts, or sweep config")
 
 
-def merge_with_defaults(param_dict: Dict[str, Any]) -> Dict[str, Any]:
-    """Merge param_dict with config defaults to create complete BacktestParams."""
-    # Build default params from config
-    default_params = {
-        "schema_version": 1,
-        "timeframes": dict(config.TIMEFRAMES),
-        "trend_existence": dict(config.TREND_EXISTENCE),
-        "trend_quality": dict(config.TREND_QUALITY),
-        "execution": dict(config.EXECUTION),
-        "angle_sizing_enabled": config.ANGLE_SIZING_ENABLED,
-        "angle_sizing_a": config.ANGLE_SIZING_A,
-        "angle_sizing_q": config.ANGLE_SIZING_Q,
-        "vol_window_div": config.VOL_WINDOW_DIV,
-        "vol_window_min": config.VOL_WINDOW_MIN,
-        "vol_window_max": config.VOL_WINDOW_MAX,
-        "vol_eps": config.VOL_EPS,
-        "direction_mode": config.DIRECTION_MODE,
-        "max_long_frac": 1.0,
-        "max_short_frac": 0.25,
-        "starting_cash_usdc_per_symbol": config.STARTING_CASH_USDC_PER_SYMBOL,
-        "taker_fee_bps": config.TAKER_FEE_BPS,
-        "min_trade_notional_pct": config.MIN_TRADE_NOTIONAL_PCT,
-    }
-    
-    # Deep merge: param_dict overrides defaults
-    def deep_merge(base: Dict, override: Dict) -> Dict:
-        result = base.copy()
-        for k, v in override.items():
-            if k in result and isinstance(result[k], dict) and isinstance(v, dict):
-                result[k] = deep_merge(result[k], v)
-            else:
-                result[k] = v
-        return result
-    
-    return deep_merge(default_params, param_dict)
-
-
 def _run_single_backtest(args_tuple: Tuple[int, Dict[str, Any], List[str], str, str, bool]) -> Dict:
     """
     Worker function for parallel execution.
@@ -206,16 +169,12 @@ def _run_single_backtest(args_tuple: Tuple[int, Dict[str, Any], List[str], str, 
     idx, param_dict, symbols, start, end, overwrite = args_tuple
     
     try:
-        # Merge with defaults to ensure complete params
-        complete_params = merge_with_defaults(param_dict)
-        params = BacktestParams.from_dict(complete_params)
-
         # Run backtest (workers never write runs.jsonl)
         result = backtest.run_backtest(
             symbols,
             start,
             end,
-            params,
+            param_dict,
             run_id=None,  # Use deterministic run_id based on param_hash
             overwrite=overwrite,
             write_run_index=False,
@@ -279,11 +238,13 @@ def run_param_sweep(
     completed_count = 0
 
     def _log_params(idx: int, param_dict: Dict[str, Any]) -> None:
-        complete_params = merge_with_defaults(param_dict)
+        complete_params, unapplied = BacktestParams.validate_and_materialize(param_dict)
+        if unapplied:
+            raise ValueError(f"Unapplied params detected: {unapplied}")
         log.info("=" * 80)
         log.info("Running parameter set %d/%d", idx + 1, len(param_list))
 
-        default_params = merge_with_defaults({})
+        default_params = BacktestParams.default_params_dict()
         diff_params = {}
         for k, v in complete_params.items():
             if k == "schema_version":

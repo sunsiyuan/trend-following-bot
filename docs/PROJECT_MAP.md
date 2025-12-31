@@ -69,6 +69,7 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 - **实际 CLI 入口**：`bot/backtest.py` 内的 `main()` 使用 `argparse` 定义 `--start/--end/--symbols/--run_id` 并在 `__main__` 下执行，因此实际运行入口为模块 `bot.backtest`（如 `python -m bot.backtest ...`）。证据：`main()` 与 `if __name__ == "__main__":`（`bot/backtest.py:L1052-L1108`）。
 - **参数扫描入口**：`bot/param_sweep.py` 提供 `main()` 函数，支持从 JSON 文件读取参数组合（显式格式 base+sweep 或隐式格式列表值），自动生成参数叉乘并批量调用 `run_backtest`；支持 `--workers` 参数进行多进程并行执行以加速大规模参数扫描。并行 sweep 下 `runs.jsonl` 仅在主进程 `as_completed` 汇聚阶段逐条 upsert（worker 不写 index）。证据：`bot/param_sweep.py:L1-L400`。
 - **可调用核心入口**：`run_backtest(symbols, start, end, params, run_id=None)` 是可 import 的回测入口，返回 run 级别结果并追加 runs.jsonl；当 run_dir 命中 skipped early-return 时仍会通过 `backtest_store.upsert_run_index_record` 补写索引。证据：`bot/backtest.py:L402-L641` 与 `bot/backtest_store.py:L123-L190`。
+- **参数单一真源 & 严格校验**：`run_backtest` 接收输入 params 后调用 `BacktestParams.validate_and_materialize` 生成 `effective_params`，若出现未映射参数键则直接报错；`config_snapshot.json`/`summary_all.json` 会写入 `input_params/effective_params/unapplied_params`。证据：`bot/backtest_params.py:L90-L170`、`bot/backtest.py:L410-L690`。
 - **主流程**：`main()` 解析参数 → 组装 `BacktestParams` → 调用 `run_backtest`；当传入多个 symbols 时，每个 symbol 会生成独立的 run_id/run_dir 并各自写入 `config_snapshot.json` 与 `summary_all.json`。证据：`bot/backtest.py:L1052-L1108`。
 - **数据读取**：`run_backtest_for_symbol` 调用 `data_client.ensure_market_data` 拉取/加载趋势与执行时间框架数据（含缓存下载）。证据：`bot/backtest.py:L345-L365` 与 `bot/data_client.py:L308-L394`。
 - **策略/信号计算**：特征计算通过 `strategy.prepare_features_1d` 与 `strategy.prepare_features_exec`，决策通过 `strategy.decide`。证据：`bot/backtest.py:L369-L507`、`bot/strategy.py:L102-L228, L353-L582`。
@@ -81,6 +82,7 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 - **CLI entry**: `bot/backtest.py` defines `main()` with `argparse` arguments (`--start/--end/--symbols/--run_id`) and runs it under `__main__`, so the runnable entry is module `bot.backtest` (e.g., `python -m bot.backtest ...`). Evidence: `main()` + `if __name__ == "__main__"` (`bot/backtest.py:L1052-L1108`).
 - **Parameter sweep entry**: `bot/param_sweep.py` provides `main()` function that reads parameter combinations from JSON (explicit base+sweep format or implicit list values), generates Cartesian product, and batch calls `run_backtest`; supports `--workers` argument for multi-process parallel execution to accelerate large-scale parameter sweeps. In parallel sweeps, `runs.jsonl` is only upserted by the main process during the `as_completed` aggregation (workers do not write the index). Evidence: `bot/param_sweep.py:L1-L400`。
 - **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is the importable backtest entrypoint and appends runs.jsonl; when a run is skipped early due to an existing run_dir, it still calls `backtest_store.upsert_run_index_record` to heal the index. Evidence: `bot/backtest.py:L402-L641` and `bot/backtest_store.py:L123-L190`.
+- **Single source of truth & strict validation**: `run_backtest` calls `BacktestParams.validate_and_materialize` to build `effective_params`, and fails fast if any input params are unmapped; `config_snapshot.json`/`summary_all.json` persist `input_params/effective_params/unapplied_params`. Evidence: `bot/backtest_params.py:L90-L170`, `bot/backtest.py:L410-L690`.
 - **Main flow**: `main()` parses args → builds `BacktestParams` → calls `run_backtest`; when multiple symbols are provided, each symbol produces its own run_id/run_dir and its own `config_snapshot.json` and `summary_all.json`. Evidence: `bot/backtest.py:L1052-L1108`.
 - **Data read**: `run_backtest_for_symbol` calls `data_client.ensure_market_data` for trend/execution timeframes (cache + download). Evidence: `bot/backtest.py:L345-L365` and `bot/data_client.py:L308-L394`.
 - **Strategy/signal**: features via `strategy.prepare_features_1d` & `strategy.prepare_features_exec`, decisions via `strategy.decide`. Evidence: `bot/backtest.py:L369-L507`, `bot/strategy.py:L102-L228, L353-L582`.
@@ -117,6 +119,7 @@ flowchart TD
 - `bot/strategy.py`：策略核心逻辑（特征构造 + 目标仓位决策），输出 `target_pos_frac` 等字段；共享给 backtest 与 live runner。证据：模块说明与 `decide()` 输出定义（`bot/strategy.py:L1-L16, L353-L582`）。
 - `bot/indicators.py`：纯数学指标（MA、Donchian、log_slope、HLC3、quantize）。证据：模块说明与函数定义（`bot/indicators.py:L1-L99`）。
 - `bot/config.py`：层级配置（trend/execution 时间框架与窗口、方向模式、角度衰减等）。证据：配置定义（`bot/config.py:L40-L177`）。
+- `bot/backtest_params.py`：回测/策略参数单一真源（`effective_params`）与严格校验；策略读取 `params` 而不是直接读取 `config` 常量。证据：`bot/backtest_params.py:L90-L170` 与 `bot/strategy.py:L140-L570`。
 
 ## 结构件（层）对应实现位置
 
@@ -144,6 +147,7 @@ flowchart TD
 - `bot/strategy.py`: core strategy logic (features + target position decision), outputs `target_pos_frac`, shared by backtest and live runner. Evidence: module description and `decide()` output (`bot/strategy.py:L1-L16, L353-L582`).
 - `bot/indicators.py`: pure math indicators (MA, Donchian, log_slope, HLC3, quantize). Evidence: module description and function definitions (`bot/indicators.py:L1-L99`).
 - `bot/config.py`: layer configs (timeframes/windows, direction mode, angle sizing, etc.). Evidence: config definitions (`bot/config.py:L40-L177`).
+- `bot/backtest_params.py`: single source of truth for `effective_params` with strict validation; strategy reads `params` instead of raw `config` constants. Evidence: `bot/backtest_params.py:L90-L170` and `bot/strategy.py:L140-L570`.
 
 ## Layer mapping to code
 
