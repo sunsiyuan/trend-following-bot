@@ -39,22 +39,28 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **时间边界语义**：回测裁剪固定为 start inclusive、end exclusive（使用 `backtest_store.slice_bars` 基于 `open_ts`/`close_ts` 裁剪）。回测侧不允许 `now()` 裁剪。  
 - **data_fingerprint（低配 manifest）**：每个 timeframe 生成 manifest，字段固定为 `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`，并通过 `stable_json` + `sha256` 生成 `data_fingerprint`。  
 - **param_hash**：`BacktestParams.to_hashable_dict` 只包含影响结果的参数；`stable_json` 后 sha256 得到 `param_hash`。  
+- **effective_params 契约**：`BacktestParams.validate_and_materialize` 负责将输入参数补齐为 `effective_params`（含默认值），任何未映射键将进入 `unapplied_params` 并触发 fail-fast；`param_hash` 基于 `effective_params` 计算。  
+- **参数快照**：`config_snapshot.json` 与 `summary_all.json` 会写入 `input_params/effective_params/unapplied_params`，用于验收“参数生效”。  
 - **risk sizing 参数注入**：`BacktestParams` 注入 `angle_sizing_*` 与 `vol_*` 到策略特征/对齐逻辑，并参与 `param_hash`，保证可复现。  
 - **strategy_version**：`bot/strategy.py` 定义 `STRATEGY_VERSION` 作为结构性变更护栏，并进入 `param_hash`；任何结构件增删、信号定义变更、仓位函数变更都必须 bump。  
 - **run_id 格式**：默认 `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`，CLI 可用 `--run_id` 覆盖。  
 - **skipped 索引自愈**：当 run_dir 已存在且参数/数据指纹一致时，回测不会重跑但仍会 upsert `runs.jsonl`，确保索引可被排名脚本使用。  
 - **并行 sweep 写入约束**：参数扫描并行时 worker 不写 `runs.jsonl`；由主进程 `as_completed` 汇聚阶段逐条 upsert（回测契约与 record 口径保持不变）。  
+- **方向模式约束**：`direction_mode=long_only` 时策略不得产生 short exposure，回测中 `pct_days_short` 必须为 0。  
 
 **English**
 
 - **Time boundary semantics**: slicing is start-inclusive, end-exclusive via `backtest_store.slice_bars` using `open_ts`/`close_ts`. No `now()` trimming in backtest slicing.  
 - **data_fingerprint (minimal manifest)**: each timeframe emits a manifest with fields `tf`, `requested_start_ts`, `requested_end_ts`, `actual_first_ts`, `actual_last_ts`, `row_count`, `expected_row_count`, hashed via `stable_json` + `sha256`.  
 - **param_hash**: `BacktestParams.to_hashable_dict` includes only result-affecting params; `stable_json` + sha256 yields `param_hash`.  
+- **effective_params contract**: `BacktestParams.validate_and_materialize` fills defaults into `effective_params`; any unmapped keys land in `unapplied_params` and fail fast; `param_hash` is computed from `effective_params`.  
+- **Config snapshots**: `config_snapshot.json` and `summary_all.json` persist `input_params/effective_params/unapplied_params` to prove parameter application.  
 - **Risk sizing injection**: `BacktestParams` injects `angle_sizing_*` and `vol_*` into feature/alignment logic and includes them in `param_hash` for reproducibility.  
 - **strategy_version**: `STRATEGY_VERSION` in `bot/strategy.py` is a structural-change guardrail and is included in `param_hash`; bump it when components/signals/position sizing change.  
 - **run_id format**: default is `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`, overridable via CLI `--run_id`.  
 - **Skipped index heal**: when the run_dir already exists with matching fingerprints, backtest skips recomputation but still upserts `runs.jsonl` so ranking can rely on the index.  
 - **Parallel sweep write constraint**: during parameter sweeps, workers do not write `runs.jsonl`; the main process upserts each record in the `as_completed` aggregation loop (backtest contract and record schema stay unchanged).  
+- **Direction-mode guardrail**: when `direction_mode=long_only`, the strategy must not produce short exposure; backtests enforce `pct_days_short == 0`.  
 
 ## Evaluation Layer Contract / 评价层契约
 

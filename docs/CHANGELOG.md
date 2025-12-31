@@ -38,6 +38,11 @@
 - backtest: include risk sizing params in `BacktestParams`/`param_hash` and persist snapshots in summaries for reproducibility; existing run outputs remain unchanged, but new runs will produce new hashes when these params differ.
 - backtest: add execution_policy trade intent gate with min_trade_notional_pct to reduce small-delta noise, track NOOP_SMALL_DELTA counts, and include trade_intent in trades logs for reproducibility.
 
+# v8 - Param sweep strict params + effective_params snapshots
+- Enforce strict parameter materialization (`input_params` → `effective_params`) with fail-fast on unapplied keys.
+- Strategy/backtest now read parameters from the materialized params object (no silent config overrides), and long-only runs enforce `pct_days_short == 0`.
+- `config_snapshot.json`/`summary_all.json` persist `input_params`, `effective_params`, and `unapplied_params` for sweep auditability.
+
 ## v7 - Final score UI sensitivity adjustment
 - Update rank `final` formula to `E * ((mdd_score / UI_eff) ** gamma)` to reduce UI sensitivity without adding parameters.
 

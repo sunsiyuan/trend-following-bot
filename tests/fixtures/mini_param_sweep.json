@@ -1,0 +1,10 @@
+{
+  "direction_mode": ["long_only", "both_side"],
+  "execution": {
+    "window": [5, 9],
+    "build_max_delta_frac": [0.25, 0.5]
+  },
+  "trend_existence": {
+    "fast_state_deadband_pct": [0.0, 0.01]
+  }
+}

@@ -35,6 +35,8 @@ def test_deadband_conf_nan_is_safe_for_target():
         fast_sign=-1.0,
         align=1.0,
         direction_mode="both_side",
+        max_long_frac=config.MAX_LONG_FRAC,
+        max_short_frac=config.MAX_SHORT_FRAC,
         deadband_conf=math.nan,
     )
     assert not math.isnan(desired)
@@ -46,6 +48,8 @@ def test_deadband_scales_short_side_in_both_mode():
         fast_sign=-1.0,
         align=1.0,
         direction_mode="both_side",
+        max_long_frac=config.MAX_LONG_FRAC,
+        max_short_frac=config.MAX_SHORT_FRAC,
         deadband_conf=0.5,
     )
     assert desired == -0.5 * config.MAX_SHORT_FRAC

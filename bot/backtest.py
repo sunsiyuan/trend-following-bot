@@ -365,25 +365,7 @@ def update_avg_and_realized(q0: float, avg0: float, dq: float, price: float) -> 
     return price, realized_close
 
 def build_params_from_config() -> BacktestParams:
-    return BacktestParams(
-        timeframes=dict(config.TIMEFRAMES),
-        trend_existence=dict(config.TREND_EXISTENCE),
-        trend_quality=dict(config.TREND_QUALITY),
-        execution=dict(config.EXECUTION),
-        angle_sizing_enabled=bool(config.ANGLE_SIZING_ENABLED),
-        angle_sizing_a=float(config.ANGLE_SIZING_A),
-        angle_sizing_q=float(config.ANGLE_SIZING_Q),
-        vol_window_div=float(config.VOL_WINDOW_DIV),
-        vol_window_min=int(config.VOL_WINDOW_MIN),
-        vol_window_max=int(config.VOL_WINDOW_MAX),
-        vol_eps=float(config.VOL_EPS),
-        direction_mode=config.DIRECTION_MODE,
-        max_long_frac=float(config.MAX_LONG_FRAC),
-        max_short_frac=float(config.MAX_SHORT_FRAC),
-        starting_cash_usdc_per_symbol=float(config.STARTING_CASH_USDC_PER_SYMBOL),
-        taker_fee_bps=float(config.TAKER_FEE_BPS),
-        min_trade_notional_pct=float(config.MIN_TRADE_NOTIONAL_PCT),
-    )
+    return BacktestParams.from_dict(BacktestParams.default_params_dict())
 
 
 def compute_default_run_id(
@@ -436,7 +418,19 @@ def run_backtest(
 
     start_ms, end_ms, start_label, end_label = normalize_date_range(start, end)
 
-    params_obj = params if isinstance(params, BacktestParams) else BacktestParams.from_dict(params)
+    if isinstance(params, BacktestParams):
+        params_obj = params
+        input_params = params_obj.to_effective_dict()
+        effective_params = params_obj.to_effective_dict()
+        unapplied_params: List[str] = []
+    else:
+        input_params = dict(params)
+        effective_params, unapplied_params = BacktestParams.validate_and_materialize(input_params)
+        if unapplied_params:
+            raise ValueError(f"Unapplied params detected: {unapplied_params}")
+        params_obj = BacktestParams.from_dict(effective_params)
+        effective_params = params_obj.to_effective_dict()
+
     params_hashable = params_obj.to_hashable_dict()
     param_hash = calc_param_hash(params_hashable)
 
@@ -541,6 +535,9 @@ def run_backtest(
                         "param_schema_version": params_obj.schema_version,
                         "data_schema_version": backtest_store.data_schema_version,
                         "strategy_version": existing_record.get("strategy_version"),
+                        "input_params": input_params,
+                        "effective_params": effective_params,
+                        "unapplied_params": unapplied_params,
                         "params_hashable": params_hashable,
                         "data_manifest_by_symbol": per_symbol_manifests,
                         "data_manifest_by_tf": manifest_flat,
@@ -605,6 +602,9 @@ def run_backtest(
         "param_schema_version": params_obj.schema_version,
         "data_schema_version": backtest_store.data_schema_version,
         "strategy_version": params_hashable.get("strategy_version"),
+        "input_params": input_params,
+        "effective_params": effective_params,
+        "unapplied_params": unapplied_params,
         "params_hashable": params_hashable,
         "data_manifest_by_symbol": per_symbol_manifests,
         "data_manifest_by_tf": manifest_flat,
@@ -617,11 +617,35 @@ def run_backtest(
         "param_schema_version": params_obj.schema_version,
         "data_schema_version": backtest_store.data_schema_version,
         "strategy_version": params_hashable.get("strategy_version"),
+        "input_params": input_params,
+        "effective_params": effective_params,
+        "unapplied_params": unapplied_params,
         "params_hashable": params_hashable,
         "data_manifest_by_tf": manifest_flat,
         "data_manifest_by_symbol": per_symbol_manifests,
     })
     write_json(run_dir / "summary_all.json", record)
+    write_json(run_dir / "config_snapshot.json", {
+        "symbols": symbols,
+        "start": start_label,
+        "end": end_label,
+        "param_hash": param_hash,
+        "data_fingerprint": data_fingerprint,
+        "input_params": input_params,
+        "effective_params": effective_params,
+        "unapplied_params": unapplied_params,
+        "QUOTE_ASSET": config.QUOTE_ASSET,
+        "MARKET_TYPE": config.MARKET_TYPE,
+        "TIMEFRAMES": dict(params_obj.timeframes),
+        "TREND_EXISTENCE": dict(params_obj.trend_existence),
+        "TREND_QUALITY": dict(params_obj.trend_quality),
+        "EXECUTION": dict(params_obj.execution),
+        "DIRECTION_MODE": params_obj.direction_mode,
+        "STARTING_CASH_USDC_PER_SYMBOL": params_obj.starting_cash_usdc_per_symbol,
+        "TAKER_FEE_BPS": params_obj.taker_fee_bps,
+        "MIN_TRADE_NOTIONAL_PCT": params_obj.min_trade_notional_pct,
+        "HL_INFO_URL": config.HL_INFO_URL,
+    })
 
     if write_run_index:
         existing_runs = backtest_store.read_jsonl(runs_jsonl_path)
@@ -691,7 +715,7 @@ def run_backtest_for_symbol(
         raise RuntimeError(f"Insufficient market data for {symbol}")
 
     df_1d_feat = strat.prepare_features_1d(df_1d, params=params)
-    df_ex_feat = strat.prepare_features_exec(df_ex)
+    df_ex_feat = strat.prepare_features_exec(df_ex, params=params)
 
     # Backtest state
     cash = float(params.starting_cash_usdc_per_symbol)
@@ -1006,6 +1030,10 @@ def run_backtest_for_symbol(
     append_jsonl(trades_path, trades)
 
     exposure_diagnostics = compute_exposure_diagnostics(df_day)
+    if params.direction_mode == "long_only" and exposure_diagnostics.get("days_short", 0) > 0:
+        raise RuntimeError(
+            "Long-only run produced short exposure; check direction_mode handling."
+        )
     decision_counts = compute_trade_decision_counts(trades)
     diagnostic_counts, diagnostic_warnings = compute_diagnostic_counts(
         trades_path,
@@ -1039,6 +1067,7 @@ def run_backtest_for_symbol(
             "vol_window_max": int(params.vol_window_max),
             "vol_eps": float(params.vol_eps),
         },
+        "pct_days_short": float(exposure_diagnostics.get("pct_short", 0.0)),
         **exposure_diagnostics,
         **diagnostic_counts,
     }
@@ -1109,29 +1138,6 @@ def main() -> None:
             continue
         run_id = result["run_id"]
         run_dir = Path(config.BACKTEST_RESULT_DIR) / run_id
-        run_symbols = result["symbols"]
-
-        # config snapshot
-        write_json(run_dir / "config_snapshot.json", {
-            "symbols": run_symbols,
-            "start": result["start"],
-            "end": result["end"],
-            "param_hash": result["param_hash"],
-            "data_fingerprint": result["data_fingerprint"],
-            "params_hashable": params.to_hashable_dict(),
-            "QUOTE_ASSET": config.QUOTE_ASSET,
-            "MARKET_TYPE": config.MARKET_TYPE,
-            "TIMEFRAMES": dict(config.TIMEFRAMES),
-            "TREND_EXISTENCE": dict(config.TREND_EXISTENCE),
-            "TREND_QUALITY": dict(config.TREND_QUALITY),
-            "EXECUTION": dict(config.EXECUTION),
-            "DIRECTION_MODE": config.DIRECTION_MODE,
-            "STARTING_CASH_USDC_PER_SYMBOL": config.STARTING_CASH_USDC_PER_SYMBOL,
-            "TAKER_FEE_BPS": config.TAKER_FEE_BPS,
-            "MIN_TRADE_NOTIONAL_PCT": config.MIN_TRADE_NOTIONAL_PCT,
-            "HL_INFO_URL": config.HL_INFO_URL,
-        })
-
         log.info("Done. Results in %s", run_dir.as_posix())
 
 if __name__ == "__main__":

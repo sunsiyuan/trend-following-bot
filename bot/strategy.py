@@ -26,7 +26,7 @@ import pandas as pd
 from bot import config
 from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
-STRATEGY_VERSION = "v3"
+STRATEGY_VERSION = "v4"
 # NOTE: Any structural strategy change (components added/removed, signal definitions,
 # or position-sizing logic changes) must bump STRATEGY_VERSION.
 
@@ -148,7 +148,7 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
     out["hlc3"] = hlc3(high, low, close)
     price_series = out["hlc3"]
     # Trend existence
-    te = config.TREND_EXISTENCE
+    te = getattr(params, "trend_existence", None) or config.TREND_EXISTENCE
     if params is not None:
         te = getattr(params, "trend_existence", te) or te
     if te["indicator"] == "ma":
@@ -166,16 +166,16 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         raise ValueError(f"Unknown trend indicator: {te['indicator']}")
 
     # Trend quality
-    tq = config.TREND_QUALITY
+    tq = getattr(params, "trend_quality", None) or config.TREND_QUALITY
     quality_ma_type = tq.get("ma_type", "sma")
     # quality_ma is always MA-based per config; shift(1) used for any potential lookback use.
     out["quality_ma"] = moving_average(price_series, tq["window"], quality_ma_type)
     out["quality_ma_prev"] = out["quality_ma"].shift(1)
-    slope_k = int(config.TREND_EXISTENCE.get("slope_k", 2))
+    slope_k = int(te.get("slope_k", 2))
     out["quality_log_slope"] = log_slope(out["quality_ma"], slope_k)
 
     if te["indicator"] == "ma" and tq["indicator"] == "ma":
-        w_fast = int(config.TREND_EXISTENCE["window"])
+        w_fast = int(te["window"])
         vol_window_div = float(_risk_value(params, "vol_window_div", config.VOL_WINDOW_DIV))
         vol_window_min = int(_risk_value(params, "vol_window_min", config.VOL_WINDOW_MIN))
         vol_window_max = int(_risk_value(params, "vol_window_max", config.VOL_WINDOW_MAX))
@@ -186,8 +186,8 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         out["delta"] = out["trend_log_slope"] - out["quality_log_slope"]
         out["sigma_price"] = out["logret"].rolling(n_vol, min_periods=n_vol).std()
         # alpha_f/alpha_s use EMA-equivalent smoothing factors regardless of MA type.
-        alpha_f = 2.0 / (float(config.TREND_EXISTENCE["window"]) + 1.0)
-        alpha_s = 2.0 / (float(config.TREND_QUALITY["window"]) + 1.0)
+        alpha_f = 2.0 / (float(te["window"]) + 1.0)
+        alpha_s = 2.0 / (float(tq["window"]) + 1.0)
         vf = alpha_f / (2.0 - alpha_f) + alpha_s / (2.0 - alpha_s)
         # sigma_mismatch_mean rescales sigma_price by vf and slope_k.
         out["sigma_mismatch_mean"] = out["sigma_price"] * np.sqrt(vf) / np.sqrt(float(slope_k))
@@ -266,19 +266,19 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
     out["deadband_active"] = deadband_active
     return out
 
-def prepare_features_exec(df_exec: pd.DataFrame) -> pd.DataFrame:
+def prepare_features_exec(df_exec: pd.DataFrame, params: Any | None = None) -> pd.DataFrame:
     """
     Adds columns needed for execution decisions (e.g., 4h MA7).
     """
     out = df_exec.copy()
-    ex = config.EXECUTION
+    ex = getattr(params, "execution", None) or config.EXECUTION
     ma_type = ex.get("ma_type", "sma")
     # exec_ma is the execution-layer MA used as a trend filter in gating.
     out["exec_ma"] = moving_average(out["close"], ex["window"], ma_type)
     return out
 
-def decide_trend_existence(row_1d: pd.Series) -> Optional[TrendDir]:
-    te = config.TREND_EXISTENCE
+def decide_trend_existence(row_1d: pd.Series, trend_existence: Dict[str, Any]) -> Optional[TrendDir]:
+    te = trend_existence
     close = float(row_1d.get("hlc3", row_1d["close"]))
 
     if te["indicator"] == "ma":
@@ -361,6 +361,8 @@ def compute_desired_target_frac(
     fast_sign: float,
     align: float,
     direction_mode: DirectionMode,
+    max_long_frac: float,
+    max_short_frac: float,
     deadband_conf: float = 1.0,
 ) -> float:
     def apply_pos_scale(desired_raw: float, max_long_frac: float, max_short_frac: float) -> float:
@@ -381,15 +383,15 @@ def compute_desired_target_frac(
     if direction_mode == "both_side":
         desired_raw = float(fast_sign) * align
         desired_raw *= deadband_conf
-        return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
+        return apply_pos_scale(desired_raw, max_long_frac, max_short_frac)
     if direction_mode == "long_only":
         desired_raw = align if fast_sign > 0 else 0.0
         desired_raw *= deadband_conf
-        return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
+        return apply_pos_scale(desired_raw, max_long_frac, max_short_frac)
     if direction_mode == "short_only":
         desired_raw = -align if fast_sign < 0 else 0.0
         desired_raw *= deadband_conf
-        return apply_pos_scale(desired_raw, config.MAX_LONG_FRAC, config.MAX_SHORT_FRAC)
+        return apply_pos_scale(desired_raw, max_long_frac, max_short_frac)
     return 0.0
 
 def smooth_target(current: float, desired: float, max_delta: float) -> float:
@@ -444,6 +446,11 @@ def decide(
       }
     """
     eps = 1e-9
+    direction_mode = getattr(params, "direction_mode", config.DIRECTION_MODE)
+    max_long_frac = float(getattr(params, "max_long_frac", config.MAX_LONG_FRAC))
+    max_short_frac = float(getattr(params, "max_short_frac", config.MAX_SHORT_FRAC))
+    trend_existence = getattr(params, "trend_existence", None) or config.TREND_EXISTENCE
+    execution_cfg = getattr(params, "execution", None) or config.EXECUTION
     # Stage A: fetch latest rows.
     row_1d = _last_row_at_or_before(df_1d_feat, ts_ms)
     row_exec = _last_row_at_or_before(df_exec_feat, ts_ms)
@@ -460,13 +467,13 @@ def decide(
             action="HOLD",
             reason="insufficient_data",
             update_last_exec=False,
-            direction_mode=config.DIRECTION_MODE,
+            direction_mode=direction_mode,
         )
 
     current = float(state.position.frac)
     # Stage B: determine market state (LONG/SHORT).
     # raw_dir uses trend existence (MA slope or Donchian); market_state follows fast_sign.
-    raw_dir = decide_trend_existence(row_1d)
+    raw_dir = decide_trend_existence(row_1d, trend_existence)
     fast_sign = float(row_1d.get("fast_sign", np.nan))
     slow_sign = float(row_1d.get("slow_sign", np.nan))
     fast_dir = _dir_from_sign(fast_sign)
@@ -481,7 +488,9 @@ def decide(
     desired = compute_desired_target_frac(
         fast_sign,
         align,
-        config.DIRECTION_MODE,
+        direction_mode,
+        max_long_frac,
+        max_short_frac,
         deadband_conf=deadband_conf,
     )
     deadband_active = bool(row_1d.get("deadband_active", False))
@@ -490,7 +499,7 @@ def decide(
     # Stage D: apply flip cooldown logic.
     current_side = _side_from_frac(current)
     desired_side = _side_from_frac(desired)
-    ex = config.EXECUTION
+    ex = execution_cfg
 
     if exec_bar_idx >= state.flip_block_until_exec_bar_idx:
         state.flip_blocked_side = None
@@ -549,7 +558,7 @@ def decide(
             action="HOLD",
             reason=reason,
             update_last_exec=False,
-            direction_mode=config.DIRECTION_MODE,
+            direction_mode=direction_mode,
         )
 
     # Stage E: choose execution pacing and gate.
@@ -616,7 +625,7 @@ def decide(
             action="HOLD",
             reason=reason,
             update_last_exec=False,
-            direction_mode=config.DIRECTION_MODE,
+            direction_mode=direction_mode,
         )
 
     # Stage F: compute smoothed target.
@@ -665,5 +674,5 @@ def decide(
         action=action,
         reason=reason,
         update_last_exec=update_last_exec,
-        direction_mode=config.DIRECTION_MODE,
+        direction_mode=direction_mode,
     )
