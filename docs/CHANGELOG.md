@@ -1,5 +1,11 @@
 # Documentation Versions
 
+## v10 - Parameter sweep parallel execution
+
+- param_sweep: add `--workers` argument for multi-process parallel execution to accelerate large-scale parameter sweeps.
+- param_sweep: use `ProcessPoolExecutor` for parallel backtest execution while maintaining deterministic run_id generation.
+- docs: update PROJECT_MAP.md to document parallel execution support.
+
 ## v9 - Parameter sweep tool
 
 - param_sweep: add `bot/param_sweep.py` for batch parameter scanning from JSON files with Cartesian product support.

@@ -8,8 +8,9 @@ Supports both explicit format (base + sweep) and implicit format (lists in neste
 import itertools
 import json
 import logging
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 from bot import backtest
 from bot.backtest_params import BacktestParams
@@ -191,14 +192,57 @@ def merge_with_defaults(param_dict: Dict[str, Any]) -> Dict[str, Any]:
     return deep_merge(default_params, param_dict)
 
 
+def _run_single_backtest(args_tuple: Tuple[int, Dict[str, Any], List[str], str, str, bool]) -> Dict:
+    """
+    Worker function for parallel execution.
+    
+    Args:
+        args_tuple: (idx, param_dict, symbols, start, end, overwrite)
+    
+    Returns:
+        Backtest result dictionary
+    """
+    idx, param_dict, symbols, start, end, overwrite = args_tuple
+    
+    # Merge with defaults to ensure complete params
+    complete_params = merge_with_defaults(param_dict)
+    params = BacktestParams.from_dict(complete_params)
+    
+    # Run backtest
+    result = backtest.run_backtest(
+        symbols,
+        start,
+        end,
+        params,
+        run_id=None,  # Use deterministic run_id based on param_hash
+        overwrite=overwrite,
+    )
+    
+    return result
+
+
 def run_param_sweep(
     param_json_path: str | Path,
     start: str,
     end: str,
     symbols: str | List[str],
     overwrite: bool = False,
+    workers: int = 1,
 ) -> List[Dict]:
-    """Run backtest for each parameter combination in param.json."""
+    """
+    Run backtest for each parameter combination in param.json.
+    
+    Args:
+        param_json_path: Path to parameter JSON file
+        start: Start date (YYYY-MM-DD)
+        end: End date (YYYY-MM-DD)
+        symbols: Comma-separated symbols or list of symbols
+        overwrite: Whether to overwrite existing runs
+        workers: Number of parallel workers (1 = sequential, >1 = parallel)
+    
+    Returns:
+        List of backtest result dictionaries
+    """
     param_path = Path(param_json_path)
     if not param_path.exists():
         raise FileNotFoundError(f"Param file not found: {param_path}")
@@ -209,49 +253,100 @@ def run_param_sweep(
     if isinstance(symbols, str):
         symbols = [s.strip() for s in symbols.split(",") if s.strip()]
     
-    results = []
-    for idx, param_dict in enumerate(param_list):
-        # Merge with defaults to ensure complete params
-        complete_params = merge_with_defaults(param_dict)
-        
-        log.info("=" * 80)
-        log.info("Running parameter set %d/%d", idx + 1, len(param_list))
-        
-        # Show only non-default values for clarity
-        default_params = merge_with_defaults({})
-        diff_params = {}
-        for k, v in complete_params.items():
-            if k == "schema_version":
-                continue
-            default_v = default_params.get(k)
-            if v != default_v:
-                if isinstance(v, dict) and isinstance(default_v, dict):
-                    # Compare nested dicts
-                    if json.dumps(v, sort_keys=True) != json.dumps(default_v, sort_keys=True):
+    if workers == 1:
+        # Sequential execution (original behavior)
+        results = []
+        for idx, param_dict in enumerate(param_list):
+            # Merge with defaults to ensure complete params
+            complete_params = merge_with_defaults(param_dict)
+            
+            log.info("=" * 80)
+            log.info("Running parameter set %d/%d", idx + 1, len(param_list))
+            
+            # Show only non-default values for clarity
+            default_params = merge_with_defaults({})
+            diff_params = {}
+            for k, v in complete_params.items():
+                if k == "schema_version":
+                    continue
+                default_v = default_params.get(k)
+                if v != default_v:
+                    if isinstance(v, dict) and isinstance(default_v, dict):
+                        # Compare nested dicts
+                        if json.dumps(v, sort_keys=True) != json.dumps(default_v, sort_keys=True):
+                            diff_params[k] = v
+                    else:
                         diff_params[k] = v
-                else:
-                    diff_params[k] = v
+            
+            if diff_params:
+                log.info("Params (non-defaults): %s", json.dumps(diff_params, indent=2, ensure_ascii=False))
+            
+            params = BacktestParams.from_dict(complete_params)
+            result = backtest.run_backtest(
+                symbols,
+                start,
+                end,
+                params,
+                run_id=None,  # Use deterministic run_id based on param_hash
+                overwrite=overwrite,
+            )
+            results.append(result)
+            
+            if result.get("status") == "skipped":
+                log.info("Run skipped (already exists): %s", result.get("run_id"))
+            else:
+                log.info("Run completed: %s", result.get("run_id"))
         
-        if diff_params:
-            log.info("Params (non-defaults): %s", json.dumps(diff_params, indent=2, ensure_ascii=False))
+        return results
+    else:
+        # Parallel execution
+        if workers < 1:
+            raise ValueError(f"workers must be >= 1, got {workers}")
         
-        params = BacktestParams.from_dict(complete_params)
-        result = backtest.run_backtest(
-            symbols,
-            start,
-            end,
-            params,
-            run_id=None,  # Use deterministic run_id based on param_hash
-            overwrite=overwrite,
-        )
-        results.append(result)
+        log.info("Running with %d parallel workers", workers)
         
-        if result.get("status") == "skipped":
-            log.info("Run skipped (already exists): %s", result.get("run_id"))
-        else:
-            log.info("Run completed: %s", result.get("run_id"))
-    
-    return results
+        # Prepare tasks
+        tasks = [
+            (idx, param_dict, symbols, start, end, overwrite)
+            for idx, param_dict in enumerate(param_list)
+        ]
+        
+        # Execute in parallel
+        results_dict = {}
+        completed_count = 0
+        
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            # Submit all tasks
+            future_to_idx = {
+                executor.submit(_run_single_backtest, task): idx
+                for idx, task in enumerate(tasks)
+            }
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    result = future.result()
+                    results_dict[idx] = result
+                    completed_count += 1
+                    
+                    if result.get("status") == "skipped":
+                        log.info("[%d/%d] Run skipped (already exists): %s", 
+                                completed_count, len(param_list), result.get("run_id"))
+                    else:
+                        log.info("[%d/%d] Run completed: %s", 
+                                completed_count, len(param_list), result.get("run_id"))
+                except Exception as exc:
+                    log.error("[%d/%d] Run failed with exception: %s", idx + 1, len(param_list), exc)
+                    results_dict[idx] = {
+                        "status": "failed",
+                        "error": str(exc),
+                        "param_index": idx,
+                    }
+        
+        # Return results in original order
+        results = [results_dict[i] for i in range(len(param_list))]
+        return results
 
 
 def main():
@@ -264,6 +359,8 @@ def main():
     ap.add_argument("--end", required=True, help="YYYY-MM-DD (UTC)")
     ap.add_argument("--symbols", default="BTC", help="Comma-separated symbols")
     ap.add_argument("--overwrite", action="store_true", help="Overwrite existing runs")
+    ap.add_argument("--workers", type=int, default=1, 
+                    help="Number of parallel workers (default: 1, sequential)")
     args = ap.parse_args()
     
     results = run_param_sweep(
@@ -272,6 +369,7 @@ def main():
         args.end,
         args.symbols,
         overwrite=args.overwrite,
+        workers=args.workers,
     )
     
     log.info("=" * 80)
