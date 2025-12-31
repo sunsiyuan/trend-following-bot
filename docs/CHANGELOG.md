@@ -1,5 +1,10 @@
 # Documentation Versions
 
+## v8 - Trend existence deadband scaling
+- strategy: add fast_state deadband confidence scaling to shrink exposure near the trend MA without changing direction; includes decision diagnostics for deadband_conf/deadband_active and strategy version bump.
+- backtest params: include trend_existence.fast_state_deadband_pct in param hashing and summary layer snapshots for reproducibility.
+- docs: document deadband formulas and position sizing integration.
+
 ## Released - Various versions
 - rank_runs: allow comma-separated or list `param_hash_prefix` inputs and normalize filters to a list for stable hashing.
 - rank_runs: drop `quarterly_stats.csv` reads so profile pct_days_* metrics always follow summary.json.

@@ -199,6 +199,21 @@ If trend existence or quality is not MA-based, the align chain is skipped, relat
 - 代码位置：bot/strategy.py::prepare_features_1d（关键变量：align, z, fast_sign）  
 - Code location: bot/strategy.py::prepare_features_1d (key vars: align, z, fast_sign)
 
+## Deadband Confidence / 临界区缩仓
+deadband 在fast_state≈0附近缩放仓位，不改变方向判定；fast_state 对应趋势 MA 的 log 空间偏离。  
+Deadband scales position size near fast_state≈0 without changing direction; fast_state is the log-space deviation from the trend MA.
+
+- 公式：eps = log1p(fast_state_deadband_pct)（若 deadband_pct<=0 则 eps=0）  
+- Formula: eps = log1p(fast_state_deadband_pct) (eps=0 when deadband_pct<=0)
+- 公式：deadband_conf = 1.0 if eps<=0 else clip(abs(fast_state)/eps, 0, 1)  
+- Formula: deadband_conf = 1.0 if eps<=0 else clip(abs(fast_state)/eps, 0, 1)
+- 公式：deadband_active = (eps>0) & (abs(fast_state)<eps)（NaN -> False）  
+- Formula: deadband_active = (eps>0) & (abs(fast_state)<eps) (NaN -> False)
+- NaN 安全：fast_state 为 NaN 时 deadband_conf=1.0，避免污染目标仓位。  
+- NaN safety: when fast_state is NaN, deadband_conf=1.0 to avoid contaminating target sizing.
+- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：deadband_conf, deadband_active）  
+- Code location: bot/strategy.py::prepare_features_1d (key vars: deadband_conf, deadband_active)
+
 ## 趋势方向与状态 / Trend Direction & State
 趋势方向（实际用于仓位方向）由fast_sign决定；fast_sign来源于fast_state的符号，market_state在决策中等于fast_dir。  
 Trend direction (used for position direction) is decided by fast_sign; fast_sign comes from the sign of fast_state, and market_state is set to fast_dir in decision logic.
@@ -234,6 +249,8 @@ Target position fraction is derived from fast_sign and align with direction mode
 - Formula (long_only): desired_raw = align if fast_sign>0 else 0
 - 公式（short_only）：desired_raw = -align if fast_sign<0 else 0  
 - Formula (short_only): desired_raw = -align if fast_sign<0 else 0
+- 公式（deadband）：desired_raw = desired_raw * deadband_conf  
+- Formula (deadband): desired_raw = desired_raw * deadband_conf
 - 公式（sign scaling）：desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0  
 - Formula (sign scaling): desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0
 - 代码位置：bot/strategy.py::compute_desired_target_frac（关键变量：fast_sign, align, direction_mode）  
