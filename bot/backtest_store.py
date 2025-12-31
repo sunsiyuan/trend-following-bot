@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Dict, Iterable, List
@@ -12,6 +14,7 @@ from bot.backtest_params import stable_json
 
 
 data_schema_version = 1
+log = logging.getLogger(__name__)
 
 
 def timeframe_to_seconds(tf: str) -> int:
@@ -180,3 +183,49 @@ def write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         for record in records:
             handle.write(stable_json(record) + "\n")
+
+
+def upsert_run_index_record(index_path: Path, record: Dict[str, Any]) -> None:
+    index_path.parent.mkdir(parents=True, exist_ok=True)
+    run_id = record.get("run_id")
+    if not run_id:
+        raise ValueError("record must include run_id")
+
+    records: List[Dict[str, Any] | None] = []
+    run_id_to_index: Dict[str, int] = {}
+    bad_line_count = 0
+
+    if index_path.exists():
+        with index_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    parsed = json.loads(line)
+                except json.JSONDecodeError:
+                    bad_line_count += 1
+                    continue
+                parsed_run_id = parsed.get("run_id")
+                if not parsed_run_id:
+                    records.append(parsed)
+                    continue
+                if parsed_run_id in run_id_to_index:
+                    records[run_id_to_index[parsed_run_id]] = None
+                run_id_to_index[parsed_run_id] = len(records)
+                records.append(parsed)
+
+    if run_id in run_id_to_index:
+        records[run_id_to_index[run_id]] = record
+    else:
+        records.append(record)
+
+    compacted = [item for item in records if item is not None]
+    tmp_path = index_path.with_name(f"{index_path.name}.tmp.{os.getpid()}")
+    with tmp_path.open("w", encoding="utf-8") as handle:
+        for item in compacted:
+            handle.write(stable_json(item) + "\n")
+    os.replace(tmp_path, index_path)
+
+    if bad_line_count:
+        log.warning("Ignored %s malformed runs.jsonl lines at %s", bad_line_count, index_path)

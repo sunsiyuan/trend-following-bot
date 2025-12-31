@@ -526,6 +526,29 @@ def run_backtest(
                 existing_data_fingerprint = existing_record.get("data_fingerprint")
                 if existing_param_hash == param_hash and existing_data_fingerprint == data_fingerprint:
                     log.info("Run %s exists, skipped.", resolved_run_id)
+                    if runs_jsonl_path is None:
+                        runs_jsonl_path = Path(config.BACKTEST_RESULT_DIR) / "runs.jsonl"
+                    skipped_record = {
+                        "run_id": resolved_run_id,
+                        "symbol_label": symbol_label,
+                        "symbols": symbols,
+                        "start": start_label,
+                        "end": end_label,
+                        "param_hash": param_hash,
+                        "data_fingerprint": data_fingerprint,
+                        "param_schema_version": params_obj.schema_version,
+                        "data_schema_version": backtest_store.data_schema_version,
+                        "strategy_version": existing_record.get("strategy_version"),
+                        "params_hashable": params_hashable,
+                        "data_manifest_by_symbol": per_symbol_manifests,
+                        "data_manifest_by_tf": manifest_flat,
+                        "status": "skipped",
+                    }
+                    backtest_store.upsert_run_index_record(runs_jsonl_path, skipped_record)
+                    log.info(
+                        "Upserted runs.jsonl index for skipped run_id=%s",
+                        resolved_run_id,
+                    )
                     return {
                         "run_id": resolved_run_id,
                         "start": start_label,

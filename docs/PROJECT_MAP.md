@@ -17,7 +17,7 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 ├─ bot/                         # 策略、回测、数据与指标的核心实现
 │  ├─ backtest.py                # 回测 CLI 入口 + 回测主流程 + 结果落盘
 │  ├─ backtest_params.py         # 回测参数容器 + stable_json + param_hash
-│  ├─ backtest_store.py          # 数据切片/manifest/fingerprint + runs.jsonl 写入
+│  ├─ backtest_store.py          # 数据切片/manifest/fingerprint + runs.jsonl 写入/补全
 │  ├─ config.py                  # 参数/常量单一真相源（symbols、timeframes、费用等）
 │  ├─ execution_policy.py        # 执行意图判定（trade vs NOOP_SMALL_DELTA）单一真源
 │  ├─ data_client.py             # 数据下载/缓存/读取（Hyperliquid candleSnapshot）
@@ -43,7 +43,7 @@ The core code lives in `bot/` and includes the backtest entry, strategy logic, d
 ├─ bot/                         # Core strategy/backtest/data/metrics modules
 │  ├─ backtest.py                # Backtest CLI entry + main loop + outputs
 │  ├─ backtest_params.py         # Backtest params container + stable_json + param_hash
-│  ├─ backtest_store.py          # Data slicing/manifest/fingerprint + runs.jsonl append
+│  ├─ backtest_store.py          # Data slicing/manifest/fingerprint + runs.jsonl write/upsert
 │  ├─ config.py                  # Single source of truth for parameters
 │  ├─ execution_policy.py        # Trade intent policy (trade vs NOOP_SMALL_DELTA)
 │  ├─ data_client.py             # Data download/cache/read (Hyperliquid)
@@ -68,7 +68,7 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 - **实际 CLI 入口**：`bot/backtest.py` 内的 `main()` 使用 `argparse` 定义 `--start/--end/--symbols/--run_id` 并在 `__main__` 下执行，因此实际运行入口为模块 `bot.backtest`（如 `python -m bot.backtest ...`）。证据：`main()` 与 `if __name__ == "__main__":`（`bot/backtest.py:L1052-L1108`）。
 - **参数扫描入口**：`bot/param_sweep.py` 提供 `main()` 函数，支持从 JSON 文件读取参数组合（显式格式 base+sweep 或隐式格式列表值），自动生成参数叉乘并批量调用 `run_backtest`；支持 `--workers` 参数进行多进程并行执行以加速大规模参数扫描。证据：`bot/param_sweep.py:L1-L350`。
-- **可调用核心入口**：`run_backtest(symbols, start, end, params, run_id=None)` 是可 import 的回测入口，返回 run 级别结果并追加 runs.jsonl。证据：`bot/backtest.py:L402-L641`。
+- **可调用核心入口**：`run_backtest(symbols, start, end, params, run_id=None)` 是可 import 的回测入口，返回 run 级别结果并追加 runs.jsonl；当 run_dir 命中 skipped early-return 时仍会通过 `backtest_store.upsert_run_index_record` 补写索引。证据：`bot/backtest.py:L402-L641` 与 `bot/backtest_store.py:L123-L190`。
 - **主流程**：`main()` 解析参数 → 组装 `BacktestParams` → 调用 `run_backtest`；当传入多个 symbols 时，每个 symbol 会生成独立的 run_id/run_dir 并各自写入 `config_snapshot.json` 与 `summary_all.json`。证据：`bot/backtest.py:L1052-L1108`。
 - **数据读取**：`run_backtest_for_symbol` 调用 `data_client.ensure_market_data` 拉取/加载趋势与执行时间框架数据（含缓存下载）。证据：`bot/backtest.py:L345-L365` 与 `bot/data_client.py:L308-L394`。
 - **策略/信号计算**：特征计算通过 `strategy.prepare_features_1d` 与 `strategy.prepare_features_exec`，决策通过 `strategy.decide`。证据：`bot/backtest.py:L369-L507`、`bot/strategy.py:L102-L228, L353-L582`。
@@ -80,7 +80,7 @@ Evidence: module-level docstrings and imports describe responsibilities (e.g., `
 
 - **CLI entry**: `bot/backtest.py` defines `main()` with `argparse` arguments (`--start/--end/--symbols/--run_id`) and runs it under `__main__`, so the runnable entry is module `bot.backtest` (e.g., `python -m bot.backtest ...`). Evidence: `main()` + `if __name__ == "__main__"` (`bot/backtest.py:L1052-L1108`).
 - **Parameter sweep entry**: `bot/param_sweep.py` provides `main()` function that reads parameter combinations from JSON (explicit base+sweep format or implicit list values), generates Cartesian product, and batch calls `run_backtest`; supports `--workers` argument for multi-process parallel execution to accelerate large-scale parameter sweeps. Evidence: `bot/param_sweep.py:L1-L350`。
-- **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is the importable backtest entrypoint and appends runs.jsonl. Evidence: `bot/backtest.py:L402-L641`.
+- **Callable entry**: `run_backtest(symbols, start, end, params, run_id=None)` is the importable backtest entrypoint and appends runs.jsonl; when a run is skipped early due to an existing run_dir, it still calls `backtest_store.upsert_run_index_record` to heal the index. Evidence: `bot/backtest.py:L402-L641` and `bot/backtest_store.py:L123-L190`.
 - **Main flow**: `main()` parses args → builds `BacktestParams` → calls `run_backtest`; when multiple symbols are provided, each symbol produces its own run_id/run_dir and its own `config_snapshot.json` and `summary_all.json`. Evidence: `bot/backtest.py:L1052-L1108`.
 - **Data read**: `run_backtest_for_symbol` calls `data_client.ensure_market_data` for trend/execution timeframes (cache + download). Evidence: `bot/backtest.py:L345-L365` and `bot/data_client.py:L308-L394`.
 - **Strategy/signal**: features via `strategy.prepare_features_1d` & `strategy.prepare_features_exec`, decisions via `strategy.decide`. Evidence: `bot/backtest.py:L369-L507`, `bot/strategy.py:L102-L228, L353-L582`.
