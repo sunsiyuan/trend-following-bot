@@ -407,6 +407,7 @@ def run_backtest(
     run_id: str | None = None,
     runs_jsonl_path: Path | None = None,
     overwrite: bool = False,
+    write_run_index: bool = True,
 ) -> Dict:
     """
     Callable backtest entrypoint for reproducible runs.
@@ -427,6 +428,7 @@ def run_backtest(
                 run_id=None,
                 runs_jsonl_path=runs_jsonl_path,
                 overwrite=overwrite,
+                write_run_index=write_run_index,
             )
             for sym in symbols
         ]
@@ -544,11 +546,12 @@ def run_backtest(
                         "data_manifest_by_tf": manifest_flat,
                         "status": "skipped",
                     }
-                    backtest_store.upsert_run_index_record(runs_jsonl_path, skipped_record)
-                    log.info(
-                        "Upserted runs.jsonl index for skipped run_id=%s",
-                        resolved_run_id,
-                    )
+                    if write_run_index:
+                        backtest_store.upsert_run_index_record(runs_jsonl_path, skipped_record)
+                        log.info(
+                            "Upserted runs.jsonl index for skipped run_id=%s",
+                            resolved_run_id,
+                        )
                     return {
                         "run_id": resolved_run_id,
                         "start": start_label,
@@ -559,6 +562,7 @@ def run_backtest(
                         "data_manifest_by_symbol": per_symbol_manifests,
                         "per_symbol": [],
                         "status": "skipped",
+                        "run_index_record": skipped_record,
                     }
                 raise RuntimeError(
                     "Run ID conflict: existing run_record.json has "
@@ -619,37 +623,39 @@ def run_backtest(
     })
     write_json(run_dir / "summary_all.json", record)
 
-    existing_runs = backtest_store.read_jsonl(runs_jsonl_path)
-    existing_same = [
-        r for r in existing_runs
-        if r.get("run_id") == resolved_run_id
-    ]
-    if existing_same:
-        fingerprints_match = all(
-            r.get("param_hash") == param_hash and r.get("data_fingerprint") == data_fingerprint
-            for r in existing_same
-        )
-        if not fingerprints_match:
-            if not overwrite:
-                raise RuntimeError(
-                    "runs.jsonl conflict: existing run_id has mismatched fingerprints."
-                )
-            existing_runs = [r for r in existing_runs if r.get("run_id") != resolved_run_id]
-        else:
-            log.info("runs.jsonl already contains run_id %s, skipping append.", resolved_run_id)
-            return {
-                "run_id": resolved_run_id,
-                "start": start_label,
-                "end": end_label,
-                "symbols": symbols,
-                "param_hash": param_hash,
-                "data_fingerprint": data_fingerprint,
-                "data_manifest_by_symbol": per_symbol_manifests,
-                "per_symbol": per_symbol_summaries,
-                "status": "completed",
-            }
+    if write_run_index:
+        existing_runs = backtest_store.read_jsonl(runs_jsonl_path)
+        existing_same = [
+            r for r in existing_runs
+            if r.get("run_id") == resolved_run_id
+        ]
+        if existing_same:
+            fingerprints_match = all(
+                r.get("param_hash") == param_hash and r.get("data_fingerprint") == data_fingerprint
+                for r in existing_same
+            )
+            if not fingerprints_match:
+                if not overwrite:
+                    raise RuntimeError(
+                        "runs.jsonl conflict: existing run_id has mismatched fingerprints."
+                    )
+                existing_runs = [r for r in existing_runs if r.get("run_id") != resolved_run_id]
+            else:
+                log.info("runs.jsonl already contains run_id %s, skipping append.", resolved_run_id)
+                return {
+                    "run_id": resolved_run_id,
+                    "start": start_label,
+                    "end": end_label,
+                    "symbols": symbols,
+                    "param_hash": param_hash,
+                    "data_fingerprint": data_fingerprint,
+                    "data_manifest_by_symbol": per_symbol_manifests,
+                    "per_symbol": per_symbol_summaries,
+                    "status": "completed",
+                    "run_index_record": record,
+                }
 
-    backtest_store.write_jsonl(runs_jsonl_path, [*existing_runs, record])
+        backtest_store.write_jsonl(runs_jsonl_path, [*existing_runs, record])
 
     return {
         "run_id": resolved_run_id,
@@ -661,6 +667,7 @@ def run_backtest(
         "data_manifest_by_symbol": per_symbol_manifests,
         "per_symbol": per_symbol_summaries,
         "status": "completed",
+        "run_index_record": record,
     }
 
 

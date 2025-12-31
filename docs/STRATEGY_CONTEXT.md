@@ -43,6 +43,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **strategy_version**：`bot/strategy.py` 定义 `STRATEGY_VERSION` 作为结构性变更护栏，并进入 `param_hash`；任何结构件增删、信号定义变更、仓位函数变更都必须 bump。  
 - **run_id 格式**：默认 `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`，CLI 可用 `--run_id` 覆盖。  
 - **skipped 索引自愈**：当 run_dir 已存在且参数/数据指纹一致时，回测不会重跑但仍会 upsert `runs.jsonl`，确保索引可被排名脚本使用。  
+- **并行 sweep 写入约束**：参数扫描并行时 worker 不写 `runs.jsonl`；由主进程 `as_completed` 汇聚阶段逐条 upsert（回测契约与 record 口径保持不变）。  
 
 **English**
 
@@ -53,6 +54,7 @@ The input/output “contract” is as follows (code-only): inputs are multi-time
 - **strategy_version**: `STRATEGY_VERSION` in `bot/strategy.py` is a structural-change guardrail and is included in `param_hash`; bump it when components/signals/position sizing change.  
 - **run_id format**: default is `{symbol}__{start}__{end}__{param_hash[:8]}__{data_fingerprint[:8]}`, overridable via CLI `--run_id`.  
 - **Skipped index heal**: when the run_dir already exists with matching fingerprints, backtest skips recomputation but still upserts `runs.jsonl` so ranking can rely on the index.  
+- **Parallel sweep write constraint**: during parameter sweeps, workers do not write `runs.jsonl`; the main process upserts each record in the `as_completed` aggregation loop (backtest contract and record schema stay unchanged).  
 
 ## Evaluation Layer Contract / 评价层契约
 
