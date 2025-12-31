@@ -1,5 +1,12 @@
 # Documentation Versions
 
+## v9 - Parameter sweep tool
+
+- param_sweep: add `bot/param_sweep.py` for batch parameter scanning from JSON files with Cartesian product support.
+- param_sweep: support explicit format (base + sweep with dot-notation paths) and implicit format (list values in nested dicts).
+- param_sweep: automatically merge with config defaults and generate deterministic run_id per parameter combination.
+- docs: update PROJECT_MAP.md to document param_sweep entry point and parameter file formats.
+
 ## v8 - Trend existence deadband scaling
 - strategy: add fast_state deadband confidence scaling to shrink exposure near the trend MA without changing direction; includes decision diagnostics for deadband_conf/deadband_active and strategy version bump.
 - backtest params: include trend_existence.fast_state_deadband_pct in param hashing and summary layer snapshots for reproducibility.
