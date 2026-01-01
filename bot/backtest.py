@@ -716,6 +716,7 @@ def run_backtest_for_symbol(
 
     df_1d_feat = strat.prepare_features_1d(df_1d, params=params)
     df_ex_feat = strat.prepare_features_exec(df_ex, params=params)
+    diagnostics_enabled = bool(getattr(config, "DIAGNOSTICS", False))
 
     # Backtest state
     cash = float(params.starting_cash_usdc_per_symbol)
@@ -730,6 +731,7 @@ def run_backtest_for_symbol(
     last_day: str = ""
     last_mark_price: float | None = None
     equity_by_day: List[Dict] = []
+    exec_diag_rows: List[Dict] | None = [] if diagnostics_enabled else None
 
     def round8(x: float) -> float:
         return float(round(x, 8))
@@ -833,6 +835,44 @@ def run_backtest_for_symbol(
             "exposure_max": round8(exposure_max),
         }
 
+    def append_exec_diag_row(
+        *,
+        ts_ms: int,
+        day: str,
+        price: float,
+        current_pos_frac: float,
+        desired_pos_frac: float,
+        target_pos_frac: float,
+        post_pos_frac: float,
+        trade_intent: str,
+        decision_reason: str,
+        fee_paid: float,
+    ) -> None:
+        if not diagnostics_enabled or exec_diag_rows is None:
+            return
+        delta_frac_raw = float(desired_pos_frac) - float(current_pos_frac)
+        delta_frac_capped = float(target_pos_frac) - float(current_pos_frac)
+        reducing = strat.is_reduction(current_pos_frac, desired_pos_frac)
+        cap_active = (
+            (not reducing)
+            and (abs(delta_frac_raw) - abs(delta_frac_capped) > 1e-12)
+        )
+        exec_diag_rows.append({
+            "ts_ms": ts_ms,
+            "date_utc": day,
+            "symbol": symbol,
+            "close_exec": price,
+            "pos_frac_eod": float(post_pos_frac),
+            "target_frac_eod": float(target_pos_frac),
+            "delta_frac_raw_eod": float(delta_frac_raw),
+            "delta_frac_capped_eod": float(delta_frac_capped),
+            "build_cap_active_cnt": 1 if cap_active else 0,
+            "exec_gate_blocked_cnt": 1 if decision_reason == "execution_gate_blocked" else 0,
+            "decision_trade_cnt": 1 if trade_intent == "TRADE" else 0,
+            "decision_noop_small_delta_cnt": 1 if trade_intent == "NOOP_SMALL_DELTA" else 0,
+            "fee_paid_1d": float(fee_paid),
+        })
+
     # Iterate execution bars inside evaluation window
     ex_items = list(df_ex_feat.loc[(df_ex_feat.index >= start_ms) & (df_ex_feat.index < end_ms)].iterrows())
     for bar_idx, (ts, row_ex) in enumerate(ex_items):
@@ -859,6 +899,7 @@ def run_backtest_for_symbol(
         assert not missing, f"Decision missing keys: {missing}"
 
         target_frac = float(decision.get("target_pos_frac") or 0.0)
+        desired_frac = float(decision.get("desired_pos_frac") or 0.0)
         current_notional = qty * price
         current_pos_frac = current_notional / equity if abs(equity) > 1e-12 else 0.0
         # Use current equity pre-trade to translate fraction -> notional.
@@ -913,6 +954,18 @@ def run_backtest_for_symbol(
                 "reason": "noop_small_delta",
             })
             trades.append(record)
+            append_exec_diag_row(
+                ts_ms=int(ts),
+                day=ms_to_ymd(int(ts)),
+                price=price,
+                current_pos_frac=current_pos_frac,
+                desired_pos_frac=desired_frac,
+                target_pos_frac=target_frac,
+                post_pos_frac=current_pos_frac,
+                trade_intent=trade_intent,
+                decision_reason=decision.get("reason") or "noop_small_delta",
+                fee_paid=0.0,
+            )
             continue
 
         reason = decision.get("reason") or "already_at_target"
@@ -971,6 +1024,18 @@ def run_backtest_for_symbol(
             "reason": reason,
         })
         trades.append(record)
+        append_exec_diag_row(
+            ts_ms=int(ts),
+            day=ms_to_ymd(int(ts)),
+            price=price,
+            current_pos_frac=current_pos_frac,
+            desired_pos_frac=desired_frac,
+            target_pos_frac=target_frac,
+            post_pos_frac=state.position.frac,
+            trade_intent=trade_intent,
+            decision_reason=reason,
+            fee_paid=fee,
+        )
 
     # record final day
     if last_day and last_mark_price is not None:
@@ -1028,6 +1093,91 @@ def run_backtest_for_symbol(
     if trades_path.exists():
         trades_path.unlink()
     append_jsonl(trades_path, trades)
+
+    if diagnostics_enabled:
+        exec_diag_df = pd.DataFrame(exec_diag_rows)
+        if not exec_diag_df.empty:
+            exec_diag_df = exec_diag_df.sort_values("ts_ms")
+            count_cols = [
+                "build_cap_active_cnt",
+                "exec_gate_blocked_cnt",
+                "decision_trade_cnt",
+                "decision_noop_small_delta_cnt",
+                "fee_paid_1d",
+            ]
+            exec_eod_cols = [
+                "date_utc",
+                "symbol",
+                "pos_frac_eod",
+                "target_frac_eod",
+                "delta_frac_raw_eod",
+                "delta_frac_capped_eod",
+            ]
+            exec_daily_eod = exec_diag_df.groupby("date_utc", as_index=False).last()
+            exec_daily_counts = exec_diag_df.groupby("date_utc", as_index=False)[count_cols].sum()
+            exec_daily = exec_daily_eod[exec_eod_cols].merge(
+                exec_daily_counts,
+                on="date_utc",
+                how="left",
+            )
+        else:
+            exec_daily = pd.DataFrame(columns=[
+                "date_utc",
+                "symbol",
+                "pos_frac_eod",
+                "target_frac_eod",
+                "delta_frac_raw_eod",
+                "delta_frac_capped_eod",
+                "build_cap_active_cnt",
+                "exec_gate_blocked_cnt",
+                "decision_trade_cnt",
+                "decision_noop_small_delta_cnt",
+                "fee_paid_1d",
+            ])
+
+        features_1d = df_1d_feat.copy()
+        features_1d["date_utc"] = pd.to_datetime(features_1d.index, unit="ms", utc=True).strftime("%Y-%m-%d")
+        features_1d["symbol"] = symbol
+        features_1d["ret_1d"] = pd.to_numeric(features_1d["close"], errors="coerce").pct_change()
+        if "sigma_mismatch_mean" in features_1d.columns:
+            features_1d["sigma_min"] = pd.to_numeric(features_1d["sigma_mismatch_mean"], errors="coerce")
+        else:
+            features_1d["sigma_min"] = pd.NA
+
+        feature_cols = [
+            "symbol",
+            "date_utc",
+            "close",
+            "ret_1d",
+            "trend_log_slope",
+            "quality_log_slope",
+            "delta",
+            "sigma_min",
+            "z",
+            "fast_state",
+            "fast_sign",
+            "slow_state",
+            "slow_sign",
+            "z_dir",
+            "penalty",
+            "penalty_q",
+            "align",
+        ]
+        features_daily = features_1d[feature_cols]
+        diagnostics_daily = features_daily.merge(
+            exec_daily,
+            on=["date_utc", "symbol"],
+            how="left",
+        )
+        fill_zero_cols = [
+            "build_cap_active_cnt",
+            "exec_gate_blocked_cnt",
+            "decision_trade_cnt",
+            "decision_noop_small_delta_cnt",
+            "fee_paid_1d",
+        ]
+        diagnostics_daily[fill_zero_cols] = diagnostics_daily[fill_zero_cols].fillna(0.0)
+        diagnostics_daily.to_csv(run_dir / "diagnostics_1d.csv", index=False)
 
     exposure_diagnostics = compute_exposure_diagnostics(df_day)
     if params.direction_mode == "long_only" and exposure_diagnostics.get("days_short", 0) > 0:

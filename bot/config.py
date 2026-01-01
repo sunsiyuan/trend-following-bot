@@ -13,6 +13,7 @@ Project config.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Dict, List, Literal, NotRequired, Optional, TypedDict
 
@@ -186,6 +187,10 @@ MAX_SHORT_FRAC: float = 0.25
 # -----------------------------
 # Backtest settings
 # -----------------------------
+
+# Diagnostics (optional backtest outputs)
+_DIAGNOSTICS_ENV = os.getenv("BOT_DIAGNOSTICS", "").strip().lower()
+DIAGNOSTICS: bool = _DIAGNOSTICS_ENV in {"1", "true", "yes", "y", "on"}
 
 # 单标的起始资金（如果多 symbol，你的回测会按 symbol 分开跑或合并跑，取决于 backtest 实现）
 STARTING_CASH_USDC_PER_SYMBOL: float = 10_000.0
