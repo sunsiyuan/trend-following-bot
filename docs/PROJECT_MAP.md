@@ -139,6 +139,7 @@ flowchart TD
   - 执行周期特征表：`strategy.prepare_features_exec` 生成 `exec_ma` 用于执行过滤。证据：`bot/strategy.py:L219-L228`。
 - **输出**：
   - `strategy.decide` 产出包含 `desired_pos_frac`、`target_pos_frac`、`action`、`reason` 等字段，被回测与 live runner 直接消费。证据：`bot/strategy.py:L353-L582`，回测消费位置 `bot/backtest.py:L501-L605`。
+  - 决策 payload 还包含波动归一相关字段 `sigma_ref`、`vol_mult`、`desired_pos_frac_pre_vol`，用于诊断仓位缩放前后的差异。证据：`bot/strategy.py:L353-L582`。
 
 **English**
 
@@ -167,6 +168,7 @@ flowchart TD
   - Execution features: `strategy.prepare_features_exec` emits `exec_ma` for gating. Evidence: `bot/strategy.py:L219-L228`.
 - **Outputs**:
   - `strategy.decide` returns `desired_pos_frac`, `target_pos_frac`, `action`, `reason`, etc., consumed by backtest/live. Evidence: `bot/strategy.py:L353-L582`, consumer in `bot/backtest.py:L501-L605`.
+  - Decision payload also includes volatility normalization fields `sigma_ref`, `vol_mult`, and `desired_pos_frac_pre_vol` for sizing diagnostics. Evidence: `bot/strategy.py:L353-L582`.
 
 # Params Audit / 参数来源审计
 

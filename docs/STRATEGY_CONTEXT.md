@@ -149,10 +149,14 @@ Return/volatility proxies (computed only when both trend existence and quality a
 - Formula: logret_t = ln(hlc3_t) - ln(hlc3_{t-1})
 - 公式：sigma_price = rolling_std(logret, n_vol, min_periods=n_vol)  
 - Formula: sigma_price = rolling_std(logret, n_vol, min_periods=n_vol)
+- 公式：ref_win = max(n_vol, 5 * n_vol)  
+- Formula: ref_win = max(n_vol, 5 * n_vol)
+- 公式：sigma_ref = rolling_median(sigma_price, ref_win, min_periods=ref_win)  
+- Formula: sigma_ref = rolling_median(sigma_price, ref_win, min_periods=ref_win)
 - 公式：n_vol = vol_window_from_fast_window(w_fast, vol_window_div, vol_window_min, vol_window_max)  
 - Formula: n_vol = vol_window_from_fast_window(w_fast, vol_window_div, vol_window_min, vol_window_max)
-- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：logret, sigma_price, n_vol；参数来自 BacktestParams 的 vol_*）  
-- Code location: bot/strategy.py::prepare_features_1d (key vars: logret, sigma_price, n_vol; params from BacktestParams vol_* fields)
+- 代码位置：bot/strategy.py::prepare_features_1d（关键变量：logret, sigma_price, sigma_ref, n_vol, ref_win；参数来自 BacktestParams 的 vol_*）  
+- Code location: bot/strategy.py::prepare_features_1d (key vars: logret, sigma_price, sigma_ref, n_vol, ref_win; params from BacktestParams vol_* fields)
 
 量化（quantization）函数用于z的向零量化：  
 Quantization function used for z is toward-zero: 
@@ -261,8 +265,14 @@ Target position fraction is derived from fast_sign and align with direction mode
 - Formula (short_only): desired_raw = -align if fast_sign<0 else 0
 - 公式（deadband）：desired_raw = desired_raw * deadband_conf  
 - Formula (deadband): desired_raw = desired_raw * deadband_conf
-- 公式（sign scaling）：desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0  
-- Formula (sign scaling): desired = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0
+- 公式（sign scaling）：desired_pre = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0  
+- Formula (sign scaling): desired_pre = desired_raw * MAX_LONG_FRAC if desired_raw>0 else desired_raw * MAX_SHORT_FRAC if desired_raw<0 else 0
+- 公式（volatility scaling）：vol_mult = clip(sigma_ref / max(sigma_price, VOL_EPS), 0, 1)  
+- Formula (volatility scaling): vol_mult = clip(sigma_ref / max(sigma_price, VOL_EPS), 0, 1)
+- 公式（post-vol）：desired = desired_pre * vol_mult  
+- Formula (post-vol): desired = desired_pre * vol_mult
+- 语义：vol_mult 仅允许缩小仓位，不会放大（上限 1.0）。  
+- Semantics: vol_mult only scales down exposure and never increases it (capped at 1.0).
 - 代码位置：bot/strategy.py::compute_desired_target_frac（关键变量：fast_sign, align, direction_mode）  
 - Code location: bot/strategy.py::compute_desired_target_frac (key vars: fast_sign, align, direction_mode)
 
