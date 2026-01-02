@@ -163,8 +163,8 @@ Quantization function used for z is toward-zero:
 - Code location: bot/indicators.py::quantize_toward_zero (key vars: x, q)
 
 ## 对齐度 align / Alignment
-对齐度在MA/MA路径中定义为“斜率不匹配惩罚”的tanh衰减；`VOL_EPS`、`ANGLE_SIZING_Q/A` 来自 BacktestParams 的 risk sizing 字段；若任何关键输入为NaN则align强制为1.0。  
-Alignment is defined on the MA/MA path as a tanh attenuation of slope mismatch penalty; `VOL_EPS` and `ANGLE_SIZING_Q/A` come from BacktestParams risk sizing fields; if any key inputs are NaN, align is forced to 1.0.
+对齐度在MA/MA路径中定义为“斜率不匹配惩罚”的tanh衰减；`VOL_EPS`、`ANGLE_SIZING_A` 来自 BacktestParams 的 risk sizing 字段；`penalty_q` 与 `penalty` 相同（连续值，无量化）；若任何关键输入为NaN则align强制为1.0。  
+Alignment is defined on the MA/MA path as a tanh attenuation of slope mismatch penalty; `VOL_EPS` and `ANGLE_SIZING_A` come from BacktestParams risk sizing fields; `penalty_q` equals `penalty` (continuous, no quantization); if any key inputs are NaN, align is forced to 1.0.
 
 - 公式：delta = trend_log_slope - quality_log_slope  
 - Formula: delta = trend_log_slope - quality_log_slope
@@ -190,8 +190,8 @@ Alignment is defined on the MA/MA path as a tanh attenuation of slope mismatch p
 - Formula: z_dir = slow_sign * z
 - 公式：penalty = max(0, -z_dir)  
 - Formula: penalty = max(0, -z_dir)
-- 公式：penalty_q = floor(penalty/ANGLE_SIZING_Q) * ANGLE_SIZING_Q  
-- Formula: penalty_q = floor(penalty/ANGLE_SIZING_Q) * ANGLE_SIZING_Q
+- 公式：penalty_q = penalty  
+- Formula: penalty_q = penalty
 - 公式：align = 1 - tanh(penalty_q/ANGLE_SIZING_A); align = clip(align, 0, 1)  
 - Formula: align = 1 - tanh(penalty_q/ANGLE_SIZING_A); align = clip(align, 0, 1)
 - 代码位置：bot/strategy.py::prepare_features_1d（关键变量：delta, sigma_mismatch_mean, z, zq, fast_state, slow_state, fast_sign, slow_sign, align）  

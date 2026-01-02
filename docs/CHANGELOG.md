@@ -43,6 +43,9 @@
 - Strategy/backtest now read parameters from the materialized params object (no silent config overrides), and long-only runs enforce `pct_days_short == 0`.
 - `config_snapshot.json`/`summary_all.json` persist `input_params`, `effective_params`, and `unapplied_params` for sweep auditability.
 
+## v8 - Remove penalty quantization floor
+- Remove the penalty floor quantization so `penalty_q` is continuous and matches `penalty`, reducing TQ sensitivity cliffs.
+
 ## v7 - Final score UI sensitivity adjustment
 - Update rank `final` formula to `E * ((mdd_score / UI_eff) ** gamma)` to reduce UI sensitivity without adding parameters.
 

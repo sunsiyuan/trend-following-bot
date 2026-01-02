@@ -136,6 +136,12 @@ def compute_deadband_conf(
     active = (abs_fast < eps) & fast_state.notna()
     return conf, active
 
+def penalty_to_penalty_q(penalty: pd.Series) -> pd.Series:
+    """
+    Identity mapping for penalty sizing (quantization removed).
+    """
+    return penalty.copy()
+
 def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.DataFrame:
     """
     Adds columns needed for 1D decisions, based on config.
@@ -217,9 +223,9 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         out["slow_sign"] = slow_sign
         # z_dir: z aligned to slow_sign; negative implies misalignment.
         out["z_dir"] = slow_sign * out["z"]
-        # penalty captures only negative alignment; then quantized to ANGLE_SIZING_Q.
+        # penalty captures only negative alignment; penalty_q is continuous (no quantization).
         out["penalty"] = np.maximum(0.0, -out["z_dir"])
-        out["penalty_q"] = np.floor(out["penalty"] / angle_sizing_q) * angle_sizing_q
+        out["penalty_q"] = penalty_to_penalty_q(out["penalty"])
         # align: [0,1] attenuation from penalty_q via tanh (higher penalty -> lower align).
         angle_sizing_a = float(_risk_value(params, "angle_sizing_a", config.ANGLE_SIZING_A))
         out["align"] = 1.0 - np.tanh(out["penalty_q"] / angle_sizing_a)
