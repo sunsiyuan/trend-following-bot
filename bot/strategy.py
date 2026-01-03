@@ -26,7 +26,7 @@ import pandas as pd
 from bot import config
 from bot.indicators import donchian, hlc3, log_slope, moving_average, quantize_toward_zero
 
-STRATEGY_VERSION = "v4"
+STRATEGY_VERSION = "v5"
 # NOTE: Any structural strategy change (components added/removed, signal definitions,
 # or position-sizing logic changes) must bump STRATEGY_VERSION.
 
@@ -54,6 +54,7 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "deadband_conf": None,
     "deadband_active": None,
     "sigma_price": None,
+    "sigma_ref": None,
     "sigma_mismatch_mean": None,
     "z": None,
     "zq": None,
@@ -61,8 +62,10 @@ DECISION_KEY_DEFAULTS: Dict[str, object] = {
     "penalty": None,
     "penalty_q": None,
     "desired_side": None,
+    "desired_pos_frac_pre_vol": None,
     "desired_pos_frac": None,
     "target_pos_frac": None,
+    "vol_mult": None,
     "regime": None,
     "action": None,
     "reason": None,
@@ -191,6 +194,8 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         # delta: fast-slow log-slope mismatch.
         out["delta"] = out["trend_log_slope"] - out["quality_log_slope"]
         out["sigma_price"] = out["logret"].rolling(n_vol, min_periods=n_vol).std()
+        ref_win = max(n_vol, int(5 * n_vol))
+        out["sigma_ref"] = out["sigma_price"].rolling(ref_win, min_periods=ref_win).median()
         # alpha_f/alpha_s use EMA-equivalent smoothing factors regardless of MA type.
         alpha_f = 2.0 / (float(te["window"]) + 1.0)
         alpha_s = 2.0 / (float(tq["window"]) + 1.0)
@@ -253,6 +258,7 @@ def prepare_features_1d(df_1d: pd.DataFrame, params: Any | None = None) -> pd.Da
         out["logret"] = np.nan
         out["delta"] = np.nan
         out["sigma_price"] = np.nan
+        out["sigma_ref"] = np.nan
         out["sigma_mismatch_mean"] = np.nan
         out["z"] = np.nan
         out["zq"] = np.nan
@@ -499,6 +505,15 @@ def decide(
         max_short_frac,
         deadband_conf=deadband_conf,
     )
+    sigma_price = float(row_1d.get("sigma_price", np.nan))
+    sigma_ref = float(row_1d.get("sigma_ref", np.nan))
+    vol_eps = float(_risk_value(params, "vol_eps", config.VOL_EPS))
+    if np.isnan(sigma_price) or np.isnan(sigma_ref) or sigma_price <= 0:
+        vol_mult = 1.0
+    else:
+        vol_mult = float(np.clip(sigma_ref / max(sigma_price, vol_eps), 0.0, 1.0))
+    desired_pre_vol = desired
+    desired = desired_pre_vol * vol_mult
     deadband_active = bool(row_1d.get("deadband_active", False))
     fast_state_deadband_pct = row_1d.get("fast_state_deadband_pct")
 
@@ -551,6 +566,7 @@ def decide(
             deadband_conf=deadband_conf,
             deadband_active=deadband_active,
             sigma_price=row_1d.get("sigma_price"),
+            sigma_ref=sigma_ref,
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
@@ -558,8 +574,10 @@ def decide(
             penalty=row_1d.get("penalty"),
             penalty_q=row_1d.get("penalty_q"),
             desired_side=desired_side,
+            desired_pos_frac_pre_vol=desired_pre_vol,
             desired_pos_frac=desired,
             target_pos_frac=current,
+            vol_mult=vol_mult,
             regime=regime,
             action="HOLD",
             reason=reason,
@@ -618,6 +636,7 @@ def decide(
             deadband_conf=deadband_conf,
             deadband_active=deadband_active,
             sigma_price=row_1d.get("sigma_price"),
+            sigma_ref=sigma_ref,
             sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
             z=row_1d.get("z"),
             zq=row_1d.get("zq"),
@@ -625,8 +644,10 @@ def decide(
             penalty=row_1d.get("penalty"),
             penalty_q=row_1d.get("penalty_q"),
             desired_side=desired_side,
+            desired_pos_frac_pre_vol=desired_pre_vol,
             desired_pos_frac=desired,
             target_pos_frac=current,
+            vol_mult=vol_mult,
             regime=regime,
             action="HOLD",
             reason=reason,
@@ -667,6 +688,7 @@ def decide(
         deadband_conf=deadband_conf,
         deadband_active=deadband_active,
         sigma_price=row_1d.get("sigma_price"),
+        sigma_ref=sigma_ref,
         sigma_mismatch_mean=row_1d.get("sigma_mismatch_mean"),
         z=row_1d.get("z"),
         zq=row_1d.get("zq"),
@@ -674,8 +696,10 @@ def decide(
         penalty=row_1d.get("penalty"),
         penalty_q=row_1d.get("penalty_q"),
         desired_side=desired_side,
+        desired_pos_frac_pre_vol=desired_pre_vol,
         desired_pos_frac=desired,
         target_pos_frac=target,
+        vol_mult=vol_mult,
         regime=regime,
         action=action,
         reason=reason,

@@ -1,5 +1,12 @@
 # Documentation Versions
 
+## v13 - Volatility normalization in position sizing
+
+- strategy: apply volatility normalization multiplier (vol_mult) to desired position sizing, clipped to [0, 1] to avoid leverage-up in low vol.
+- strategy: compute sigma_ref from sigma_price with ref_win = 5 * n_vol median window for stable reference volatility.
+- docs: document vol_mult sizing formula and new decision payload fields.
+- rollback: revert commit or remove vol_mult multiplier in strategy decision sizing.
+
 ## v12 - Param sweep main-process runs index writes
 
 - backtest: add `write_run_index` toggle so workers can return run index records without writing runs.jsonl.
