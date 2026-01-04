@@ -523,7 +523,7 @@ def run_backtest(
                 if existing_param_hash == param_hash and existing_data_fingerprint == data_fingerprint:
                     log.info("Run %s exists, skipped.", resolved_run_id)
                     if runs_jsonl_path is None:
-                        runs_jsonl_path = Path(config.BACKTEST_RESULT_DIR) / "runs.jsonl"
+                        runs_jsonl_path = Path(config.BACKTEST_RUNS_JSONL)
                     skipped_record = {
                         "run_id": resolved_run_id,
                         "symbol_label": symbol_label,
@@ -589,7 +589,7 @@ def run_backtest(
     per_symbol_summaries.append(summary)
 
     if runs_jsonl_path is None:
-        runs_jsonl_path = Path(config.BACKTEST_RESULT_DIR) / "runs.jsonl"
+        runs_jsonl_path = Path(config.BACKTEST_RUNS_JSONL)
 
     record = {
         "run_id": resolved_run_id,

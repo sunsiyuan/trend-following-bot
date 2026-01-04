@@ -211,6 +211,7 @@ TAKER_FEE_BPS: float = 4.5  # e.g., 3.5 bps => 3.5
 DATA_DIR: str = "data"
 MARKET_DATA_DIR: str = f"{DATA_DIR}/market_data"
 BACKTEST_RESULT_DIR: str = f"{DATA_DIR}/backtest_result"
+BACKTEST_RUNS_JSONL: str = f"{DATA_DIR}/runs.jsonl"
 
 # Hyperliquid public API
 HL_INFO_URL: str = "https://api.hyperliquid.xyz/info"
