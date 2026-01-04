@@ -644,7 +644,7 @@ def write_rank_results_csv(path: Path, rows: List[Dict[str, Any]], columns: List
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--runs-jsonl", default="", help="Path to runs.jsonl (default: data/backtest_result/runs.jsonl)")
+    ap.add_argument("--runs-jsonl", default="", help="Path to runs.jsonl (default: data/runs.jsonl)")
     ap.add_argument("--output-root", default="data/backtest_rank", help="Output root directory")
     ap.add_argument("--symbols", default="", help="Comma-separated symbols")
     ap.add_argument("--requested-start", default="", help="Requested start (YYYY-MM-DD)")
@@ -684,7 +684,7 @@ def main() -> None:
             encoding="utf-8",
         )
 
-    runs_jsonl = Path(args.runs_jsonl) if args.runs_jsonl else Path(config.BACKTEST_RESULT_DIR) / "runs.jsonl"
+    runs_jsonl = Path(args.runs_jsonl) if args.runs_jsonl else Path(config.BACKTEST_RUNS_JSONL)
     run_records = _read_runs_jsonl(runs_jsonl)
     selected_runs = _filter_runs(run_records, filters)
 

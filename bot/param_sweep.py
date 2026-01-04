@@ -233,7 +233,7 @@ def run_param_sweep(
     if workers < 1:
         raise ValueError(f"workers must be >= 1, got {workers}")
 
-    runs_jsonl_path = Path(config.BACKTEST_RESULT_DIR) / "runs.jsonl"
+    runs_jsonl_path = Path(config.BACKTEST_RUNS_JSONL)
     results_dict: Dict[int, Dict[str, Any]] = {}
     completed_count = 0
 
@@ -268,6 +268,11 @@ def run_param_sweep(
             record = worker_result.get("run_index_record")
             if record:
                 backtest_store.upsert_run_index_record(runs_jsonl_path, record)
+            elif result.get("status") == "multi":
+                for run in result.get("runs", []):
+                    run_record = run.get("run_index_record")
+                    if run_record:
+                        backtest_store.upsert_run_index_record(runs_jsonl_path, run_record)
             results_dict[idx] = result
             if result.get("status") == "skipped":
                 log.info("[%d/%d] Run skipped (already exists): %s",
