@@ -743,16 +743,19 @@ def run_backtest_for_symbol(
 
     def build_day_row(day: str, mark_price: float) -> Dict:
         # Daily equity snapshot uses mark-to-market at last execution close.
+        qty_for_row = 0.0 if abs(qty) < 1e-8 else qty
         equity = cash + qty * mark_price
-        position_value = abs(qty) * mark_price
+        position_value = abs(qty_for_row) * mark_price
         net_exposure = position_value / equity if abs(equity) > 1e-12 else 0.0
-        unrealized_pnl = qty * (mark_price - avg_entry) if abs(qty) > 1e-12 else 0.0
+        unrealized_pnl = (
+            qty_for_row * (mark_price - avg_entry) if abs(qty_for_row) > 1e-12 else 0.0
+        )
         return {
             "date_utc": day,
             "equity": round8(equity),
             "cash_usdc": round8(cash),
-            "position_side": position_side_from_qty(qty),
-            "position_qty": round8(qty),
+            "position_side": position_side_from_qty(qty_for_row),
+            "position_qty": round8(qty_for_row),
             "avg_entry_price": round8(avg_entry),
             "mark_price": round8(mark_price),
             "position_value_usdc": round8(position_value),
@@ -798,9 +801,13 @@ def run_backtest_for_symbol(
         else:
             position_qty = pd.Series([0.0] * days_total)
 
-        in_position = (position_side != "FLAT") | (position_qty.abs() > 0)
-        is_long = (position_side == "LONG") | (position_qty > 0)
-        is_short = (position_side == "SHORT") | (position_qty < 0)
+        qty_eps = 1e-8
+        position_qty = position_qty.mask(position_qty.abs() <= qty_eps, 0.0)
+        position_side = position_side.mask(position_qty.abs() <= qty_eps, "FLAT")
+
+        in_position = (position_side != "FLAT") | (position_qty.abs() > qty_eps)
+        is_long = (position_side == "LONG") | (position_qty > qty_eps)
+        is_short = (position_side == "SHORT") | (position_qty < -qty_eps)
 
         days_in_position = int(in_position.sum())
         days_long = int(is_long.sum())
